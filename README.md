@@ -82,7 +82,7 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
   `NaN`, sin `shadowBlur`, todas las partículas mueren.
 - **Audio**: los 16 sonidos con un doble de `AudioContext`.
 
-**Navegador** (`node tools/e2e.mjs`) — 31 secciones en Chromium sin cabeza, entre ellas:
+**Navegador** (`node tools/e2e.mjs`) — 37 secciones (65 comprobaciones) en Chromium sin cabeza, entre ellas:
 
 | Qué comprueba | Cómo |
 |---|---|
@@ -95,7 +95,7 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
 | Rendimiento | 60 fps a DPR 1 y 59 fps a DPR 2 con animaciones completas |
 | Autocontención | cero peticiones de red, interceptando el tráfico |
 | Accesibilidad | `prefers-reduced-motion` sin fogonazos ni parpadeos; el teclado no secuestra los controles |
-| Adaptable | siete tamaños de ventana sin recorte ni desbordamiento |
+| Adaptable | siete tamaños de ventana sin recorte ni desbordamiento; el lienzo sigue al contenedor aunque el panel crezca |
 
 El juego pasó además una revisión adversarial en seis dimensiones (reglas, animación, render,
 fidelidad al encargo, robustez e interfaz), cuyos hallazgos se corrigieron con una prueba de
