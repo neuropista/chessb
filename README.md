@@ -70,10 +70,35 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
 
 ## Verificación
 
-- El motor supera **perft** en las cinco posiciones canónicas (inicial, *Kiwipete*, y las
-  posiciones 3, 4 y 5) — la comprobación estándar de que la generación de jugadas es correcta.
-- La suite de extremo a extremo comprueba el hit-test de las 64 casillas en ambas
-  orientaciones, los seis guiones de combate, enroque/al paso/promoción animados, autojuego
-  IA vs IA, rendimiento, robustez ante clics durante el combate y el diseño en móvil.
+**Node** (`npm test`) — cuatro suites:
+
+- **Motor**: **perft** en las cinco posiciones canónicas (inicial, *Kiwipete*, y las
+  posiciones 3, 4 y 5) hasta profundidad 4-5 — la comprobación estándar de que la generación
+  de jugadas es correcta — más FEN de ida y vuelta, no-mutación, SAN desambiguado y las
+  cuatro formas de tablas.
+- **IA**: 30 partidas de autojuego sin una sola jugada ilegal, mate en 1, material colgado y
+  presupuesto de tiempo. El nivel 3 puntúa 100 % contra el nivel 1.
+- **Efectos**: 600 fotogramas con un contexto 2D falso — `save`/`restore` balanceados, sin
+  `NaN`, sin `shadowBlur`, todas las partículas mueren.
+- **Audio**: los 16 sonidos con un doble de `AudioContext`.
+
+**Navegador** (`node tools/e2e.mjs`) — 31 secciones en Chromium sin cabeza, entre ellas:
+
+| Qué comprueba | Cómo |
+|---|---|
+| Proyección 2.5D | las 64 casillas resuelven a su índice en ambas orientaciones |
+| Los seis guiones de combate | cada tipo de pieza, con recuento de partículas y fotogramas |
+| Enroque, al paso y promoción | animados y con la SAN correcta |
+| Nunca se bloquea | 40 clics aleatorios en mitad de un combate |
+| Deshacer con IA al mando | la partida sigue viva en los tres modos |
+| Geometría del duelo | los dos combatientes nunca se tapan (seis geometrías) |
+| Rendimiento | 60 fps a DPR 1 y 59 fps a DPR 2 con animaciones completas |
+| Autocontención | cero peticiones de red, interceptando el tráfico |
+| Accesibilidad | `prefers-reduced-motion` sin fogonazos ni parpadeos; el teclado no secuestra los controles |
+| Adaptable | siete tamaños de ventana sin recorte ni desbordamiento |
+
+El juego pasó además una revisión adversarial en seis dimensiones (reglas, animación, render,
+fidelidad al encargo, robustez e interfaz), cuyos hallazgos se corrigieron con una prueba de
+regresión cada uno.
 
 El análisis del encargo original y el prompt reescrito están en [`PROMPT.md`](PROMPT.md).
