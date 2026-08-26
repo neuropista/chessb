@@ -445,7 +445,9 @@ const flipMid = await page.evaluate(async () => {
   const okBefore = B.G.log[0];
   document.getElementById('flip').click();
   const a = B.anchorOfIdx(27);
-  return { btnDisabled, actorSr, log: okBefore, girado: B.pickSquare(a.x, a.y) === 27 };
+  const girado = B.pickSquare(a.x, a.y) === 27;
+  B.setFlip(false);                      // se restaura la orientacion para las demas pruebas
+  return { btnDisabled, actorSr, log: okBefore, girado };
 });
 ok(flipMid.btnDisabled, 'el boton Girar se deshabilita mientras hay combate');
 ok(flipMid.log === 'exd5' && flipMid.girado, 'el combate termina bien y girar en reposo sigue funcionando');
@@ -564,6 +566,193 @@ const flashCov = await hidpi.evaluate(async () => {
 ok(flashCov.seen > 0 && flashCov.best > 90, 'la esquina opuesta se ilumina durante el fogonazo (' + flashCov.seen + ' frames, luminancia ' + flashCov.best + ')');
 await hidpi.close();
 await page.setViewportSize({ width: 1280, height: 800 });
+
+console.log('\n== 26. Los duelistas nunca quedan uno tapando al otro ==');
+const DUELOS = [
+  ['misma columna, cerca', '3r4/8/8/8/8/8/8/3RK1k1 w - - 0 1', 59, 3],
+  ['misma columna, lejos', '4k3/3r4/8/8/8/8/8/3RK3 w - - 0 1', 59, 11],
+  ['misma columna, un paso', '4k3/8/8/3p4/3R4/8/8/4K3 w - - 0 1', 35, 27],
+  ['misma fila', '4k3/8/8/1R2p3/8/8/8/4K3 w - - 0 1', 25, 28],
+  ['diagonal larga', '4k3/8/8/3p4/8/1B6/8/4K3 w - - 0 1', 41, 27],
+  ['caballo', '4k3/8/8/3p4/8/4N3/8/4K3 w - - 0 1', 44, 27]
+];
+const seps = [];
+for (const [name, fen, from, to] of DUELOS) {
+  const r = await page.evaluate(async ([fen, from, to]) => {
+    const B = window.__BC;
+    document.getElementById('speed').value = 'epico';
+    document.getElementById('speed').dispatchEvent(new Event('change'));
+    document.getElementById('mode').value = 'hh';
+    document.getElementById('mode').dispatchEvent(new Event('change'));
+    B.setFlip(false);
+    B.setState(B.Engine.fromFen(fen));
+    const mv = B.Engine.legalMoves(B.G.state).find(m => m.from === from && m.to === to);
+    if (!mv || !mv.cap) return { err: 'sin captura' };
+    B.startMove(mv);
+    let peor = 99, medidas = 0;
+    const t0 = performance.now();
+    while (B.busy && performance.now() - t0 < 14000) {
+      await new Promise(r => requestAnimationFrame(r));
+      const an = B.anim;
+      if (!an || !an.spotAt || an.spot < 0.5) continue;
+      const A = an.actors[0], D = an.actors[1];
+      if (!A || !D || A.hidden || D.hidden) continue;
+      /* Solo el cara a cara: durante la estocada o la embestida el atacante
+         invade la casilla del defensor a proposito. */
+      if (A.frame === 'attack' || D.frame === 'attack') continue;
+      const pa = B.anchorOf(A.sr, A.sc), pd = B.anchorOf(D.sr, D.sc);
+      const ancho = 24 * B.pix() * pd.s;          // anchura del sprite en pantalla
+      const sep = Math.abs(pa.x - pd.x) / ancho;
+      if (sep < peor) peor = sep;
+      medidas++;
+    }
+    return { peor: Math.round(peor * 100) / 100, medidas };
+  }, [fen, from, to]);
+  seps.push(name + ': ' + (r.err || r.peor));
+  ok(!r.err && r.medidas > 5 && r.peor >= 0.28,
+    name + ': separacion minima ' + (r.err || r.peor) + ' anchuras de sprite (minimo 0.28)');
+}
+
+console.log('\n== 27. Los duelistas se pintan de lejos a cerca ==');
+const orden = await page.evaluate(async () => {
+  const B = window.__BC;
+  B.setFlip(false);
+  document.getElementById('speed').value = 'epico';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  let muestras = 0, desordenados = 0, conAtacanteDelante = 0;
+  /* Dos sentidos: capturando hacia el fondo (atacante mas cerca) y hacia
+     delante (atacante mas lejos). En ambos manda la profundidad. */
+  for (const [fen, from, to] of [
+    ['4k3/8/8/3p4/3R4/8/8/4K3 w - - 0 1', 35, 27],
+    ['4k3/8/8/3R4/3p4/8/8/4K3 w - - 0 1', 27, 35]
+  ]) {
+    B.setState(B.Engine.fromFen(fen));
+    const mv = B.Engine.legalMoves(B.G.state).find(m => m.from === from && m.to === to);
+    if (!mv || !mv.cap) return { err: 'sin captura en ' + fen };
+    B.startMove(mv);
+    const t0 = performance.now();
+    while (B.busy && performance.now() - t0 < 14000) {
+      await new Promise(r => requestAnimationFrame(r));
+      const an = B.anim;
+      const ord = an && an.drawOrder;
+      if (!ord || ord.length < 2) continue;
+      muestras++;
+      for (let i = 1; i < ord.length; i++) if (ord[i] < ord[i - 1]) desordenados++;
+      const A = an.actors[0], D = an.actors[1];
+      if (A && D && A.sr > D.sr) conAtacanteDelante++;
+    }
+  }
+  return { muestras, desordenados, conAtacanteDelante };
+});
+ok(!orden.err && orden.muestras > 20 && orden.desordenados === 0 && orden.conAtacanteDelante > 10,
+  'el foco repinta a los duelistas ordenados por profundidad (' + orden.muestras +
+  ' fotogramas, ' + orden.desordenados + ' desordenados)');
+
+console.log('\n== 28. Espacio durante el combate no activa el boton enfocado ==');
+const spaceGuard = await page.evaluate(async () => {
+  const B = window.__BC;
+  B.setFlip(false);
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'epico';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+  for (let i = 0; i < 20; i++) await new Promise(r => requestAnimationFrame(r));
+  const nueva = document.getElementById('new');
+  nueva.focus();
+  const ev = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  nueva.dispatchEvent(ev);
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 8000) await new Promise(r => requestAnimationFrame(r));
+  return {
+    prevenido: ev.defaultPrevented,
+    piezas: B.G.state.b.filter(Boolean).length,   // 3 si el combate acabo; 32 si "Nueva" se activo
+    log: B.G.log[0] || ''
+  };
+});
+ok(spaceGuard.prevenido && spaceGuard.piezas === 3 && spaceGuard.log === 'Qxd5',
+  'con "Nueva" enfocado, Espacio acelera el combate en vez de reiniciar (' + spaceGuard.piezas + ' piezas, ' + spaceGuard.log + ')');
+
+console.log('\n== 29. Cualquier gesto arranca el audio ==');
+const audioArm = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+await audioArm.addInitScript(() => {
+  window.__ctxCreados = 0;
+  const Real = window.AudioContext || window.webkitAudioContext;
+  if (Real) {
+    const Wrapped = function () { window.__ctxCreados++; return new Real(); };
+    Wrapped.prototype = Real.prototype;
+    window.AudioContext = Wrapped;
+    window.webkitAudioContext = Wrapped;
+  }
+});
+await audioArm.goto(URL);
+await audioArm.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const antesDeGesto = await audioArm.evaluate(() => window.__ctxCreados);
+await audioArm.selectOption('#mode', 'aa');       // unico gesto: un desplegable
+await audioArm.waitForTimeout(400);
+const trasGesto = await audioArm.evaluate(() => window.__ctxCreados);
+ok(antesDeGesto === 0 && trasGesto >= 1, 'elegir un modo arranca el AudioContext (' + antesDeGesto + ' -> ' + trasGesto + ')');
+await audioArm.close();
+
+console.log('\n== 30. prefers-reduced-motion suprime combate, fogonazo y parpadeo ==');
+const rm2 = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+await rm2.emulateMedia({ reducedMotion: 'reduce' });
+await rm2.goto(URL);
+await rm2.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const rmRes = await rm2.evaluate(async () => {
+  const B = window.__BC;
+  const inicial = { reduced: B.G.reduced, speed: B.G.speedKey, ts: B.G.timeScale };
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  let flashes = 0, blancos = 0, frames = 0;
+  for (const fen of ['4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1', '4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1']) {
+    B.setState(B.Engine.fromFen(fen));
+    B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+    const t0 = performance.now();
+    while (B.busy && performance.now() - t0 < 8000) {
+      await new Promise(r => requestAnimationFrame(r));
+      frames++;
+      const an = B.anim;
+      if (!an) continue;
+      if (an.flash > 0.01) flashes++;
+      for (const a of an.actors) if (a.white) blancos++;
+    }
+  }
+  return { inicial, flashes, blancos, frames };
+});
+ok(rmRes.inicial.reduced && rmRes.inicial.speed === 'sin' && rmRes.inicial.ts === 0,
+  'arranca en "Sin combate" con escala 0 (' + rmRes.inicial.speed + ', ts=' + rmRes.inicial.ts + ')');
+ok(rmRes.flashes === 0 && rmRes.blancos === 0,
+  'ni un fotograma con fogonazo o parpadeo blanco (' + rmRes.flashes + ' / ' + rmRes.blancos + ')');
+await rm2.close();
+
+console.log('\n== 31. "Sin combate" tiene escala 0 y corta la animacion en curso ==');
+const speedZero = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'epico';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+  for (let i = 0; i < 24; i++) await new Promise(r => requestAnimationFrame(r));
+  const t0 = performance.now();
+  document.getElementById('speed').value = 'sin';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  const ts = B.G.timeScale;
+  let esperas = 0;
+  while (B.busy && performance.now() - t0 < 5000) { await new Promise(r => requestAnimationFrame(r)); esperas++; }
+  return { ts, ms: Math.round(performance.now() - t0), esperas, log: B.G.log[0] || '', busy: B.busy };
+});
+ok(speedZero.ts === 0 && !speedZero.busy && speedZero.ms < 900 && speedZero.log === 'Qxd5',
+  'elegir "Sin combate" corta el duelo al instante (escala ' + speedZero.ts + ', ' + speedZero.ms + 'ms)');
+await page.evaluate(() => {
+  document.getElementById('speed').value = 'normal';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+});
 
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');

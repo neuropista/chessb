@@ -167,6 +167,8 @@ function bodyPoint(sr, sc, fy, dx) {
 /* ============================ ESTADO DEL JUEGO ========================== */
 const MODES = { hh: 'Humano vs Humano', ha: 'Humano vs IA', ah: 'IA vs Humano', aa: 'IA vs IA' };
 const SPEEDS = { epico: 0.62, normal: 1, rapido: 1.9, sin: 0 };
+/* Ojo: "sin" vale 0, que es falsy; nunca usar SPEEDS[k] || 1. */
+function speedScale(k) { const v = SPEEDS[k]; return typeof v === 'number' ? v : 1; }
 
 const G = {
   state: null,
@@ -406,7 +408,7 @@ function battleActs(A, D, ctxb) {
           FX.emit('sparks', c.x, c.y, { n: 16, color: glow, color2: THEME.fx.flash });
           shake(12); sfx('capture');
           say('¡FLASH!', c.x, c.y - c.k * 12, glow);
-          anim.flash = 0.55;
+          if (!G.reduced) anim.flash = 0.55;
           D.white = true;
         });
       },
@@ -492,7 +494,11 @@ function deathAct(D) {
   const a = {
     d: 0.58,
     tick: function (u) {
-      if (u < 0.30) { D.white = (Math.floor(u / 0.045) % 2) === 0; D.lift = 1.5 * Math.sin(u * 18); }
+      if (u < 0.30) {
+        /* El parpadeo va a ~11 Hz: se anula con prefers-reduced-motion. */
+        D.white = G.reduced ? false : (Math.floor(u / 0.045) % 2) === 0;
+        D.lift = G.reduced ? 0 : 1.5 * Math.sin(u * 18);
+      }
       else {
         ONCE(a, 'burst', function () {
           D.white = false;
@@ -515,7 +521,7 @@ function promoAct(A, promo) {
     d: 0.72,
     enter: function () { sfx('promote'); },
     tick: function (u) {
-      if (u < 0.35) { A.white = (Math.floor(u / 0.05) % 2) === 0; A.lift = 6 * easeOut(u / 0.35); }
+      if (u < 0.35) { A.white = G.reduced ? false : (Math.floor(u / 0.05) % 2) === 0; A.lift = 6 * easeOut(u / 0.35); }
       else {
         ONCE(a, 'pop', function () {
           A.white = false; A.t = promo;
@@ -570,15 +576,26 @@ function buildAnim(move, next, san) {
     anim.hide.add(dsq);
     const dp = idxToRC(dsq);
     const len = Math.hypot(dp.sr - from.sr, dp.sc - from.sc) || 1;
-    const ux = (from.sc - dp.sc) / len, uy = (from.sr - dp.sr) / len;
-    const stand = { sr: dp.sr + uy * 0.66, sc: dp.sc + ux * 0.66 };
+    const vx = (from.sc - dp.sc) / len, vy = (from.sr - dp.sr) / len;
+    /* En una captura por la misma columna (vx = 0) los dos duelistas caerian en
+       la misma vertical de pantalla y uno taparia al otro: la perspectiva
+       comprime la separacion en profundidad casi a cero en las filas lejanas.
+       Se anade un desplazamiento lateral hacia el centro del tablero. */
+    const side = dp.sc <= 3.5 ? 1 : -1;
+    const lateral = side * 0.62 * (1 - Math.min(1, Math.abs(vx) / 0.55));
+    const stand = { sr: dp.sr + vy * 0.66, sc: dp.sc + vx * 0.66 + lateral };
+    /* El vector de ataque se recalcula desde el puesto real, para que las
+       estocadas y embestidas sigan apuntando al defensor. */
+    const adx = stand.sc - dp.sc, ady = stand.sr - dp.sr;
+    const alen = Math.hypot(adx, ady) || 1;
+    const ux = adx / alen, uy = ady / alen;
     const ctxb = { ux: ux, uy: uy, stand: stand, d0: { sr: dp.sr, sc: dp.sc }, chargedPast: false };
 
     acts.push({
       d: 0.48,
       enter: function () {
         sfx('move');
-        A.flipX = (dp.sc - from.sc) < 0 ? true : (dp.sc - from.sc) > 0 ? false : A.flipX;
+        A.flipX = stand.sc > dp.sc;   // se giran el uno hacia el otro
         D.flipX = !A.flipX;
       },
       tick: function (u, t) {
@@ -1003,9 +1020,14 @@ function render(time) {
     g.globalAlpha = clamp(anim.spot, 0, 1);
     g.drawImage(spotLayer(anim.spotAt.sr, anim.spotAt.sc), 0, 0, L.w, L.h);
     g.restore();
-    for (const a of anim.actors) {
-      if (a.hidden) continue;
-      drawShadow(g, a.sr, a.sc, a.lift, 0.40, a.t === 'r' ? 1.15 : 1);
+    /* Mismo criterio que collectRenderables(): primero todas las sombras y
+       luego los sprites, de lejos a cerca. Sin ordenar, el defensor (que se
+       anade despues) tapaba al atacante aunque estuviese mas cerca. */
+    const duel = anim.actors.filter(function (a) { return !a.hidden; })
+      .sort(function (x, y) { return x.sr - y.sr; });
+    anim.drawOrder = duel.map(function (a) { return a.sr; });   // invariante comprobable
+    for (const a of duel) drawShadow(g, a.sr, a.sc, a.lift, 0.40, a.t === 'r' ? 1.15 : 1);
+    for (const a of duel) {
       drawSprite(g, a.t, a.c, a.sr, a.sc, {
         frame: a.frame, flipX: a.flipX, lift: a.lift, alpha: a.alpha,
         white: a.white, squash: a.squash, lean: a.lean, scale: a.scale
@@ -1179,6 +1201,10 @@ function skipAnim() {
 function forceFinish() { skipAnim(); }
 
 function bindInput() {
+  /* El AudioContext necesita un gesto del usuario: vale cualquiera, incluido
+     desplegar un selector (en modo IA vs IA no se toca el tablero jamas). */
+  window.addEventListener('pointerdown', armSound, { capture: true });
+  window.addEventListener('keydown', armSound, { capture: true });
   cv.addEventListener('pointerdown', function (ev) {
     armSound();
     if (G.promo) return;
@@ -1200,10 +1226,18 @@ function bindInput() {
     const onControl = tag === 'button' || tag === 'select' || tag === 'input' || tag === 'textarea';
     const k = ev.key.toLowerCase();
     if (k === 'escape') { closePromo(); G.sel = -1; G.targets = []; syncUI(); return; }
+    if (k === ' ' || k === 'enter') {
+      /* Durante el combate la barra siempre acelera, aunque haya un boton
+         enfocado: si no, activaria ese boton en mitad de la animacion. */
+      if (G.busy) { ev.preventDefault(); armSound(); skipAnim(); syncUI(); return; }
+      if (onControl) return;          // fuera del combate el control se queda la tecla
+      ev.preventDefault();
+      armSound();
+      return;
+    }
     if (onControl) return;
     armSound();
-    if (k === ' ' || k === 'enter') { ev.preventDefault(); if (G.busy) skipAnim(); }
-    else if (k === 'u') undo();
+    if (k === 'u') undo();
     else if (k === 'n') { hideBanner(); newGame(); }
     else if (k === 'f') toggleFlip();
     else if (k === 'm') { UI.sound.click(); }
@@ -1276,7 +1310,9 @@ function init() {
     flip: $('flip')
   };
   G.reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  if (G.reduced) { G.speedKey = 'rapido'; }
+  /* Con movimiento reducido no se acelera el combate: se suprime. El usuario
+     puede volver a activarlo desde el selector de Ritmo si asi lo quiere. */
+  if (G.reduced) { G.speedKey = 'sin'; }
 
   applyThemeVars();
   harden();
@@ -1286,17 +1322,20 @@ function init() {
 
   $('new').onclick = function () { armSound(); hideBanner(); newGame(); };
   UI.undo.onclick = function () { armSound(); hideBanner(); undo(); };
-  $('flip').onclick = function () { toggleFlip(); };
-  $('mode').onchange = function (e) { G.mode = e.target.value; hideBanner(); newGame(); };
+  $('flip').onclick = function () { armSound(); toggleFlip(); };
+  $('mode').onchange = function (e) { armSound(); G.mode = e.target.value; hideBanner(); newGame(); };
   $('mode').value = G.mode;
-  $('level').onchange = function (e) { G.aiLevel = parseInt(e.target.value, 10) || 2; };
+  $('level').onchange = function (e) { armSound(); G.aiLevel = parseInt(e.target.value, 10) || 2; };
   $('level').value = String(G.aiLevel);
   $('speed').onchange = function (e) {
+    armSound();
     G.speedKey = e.target.value;
-    G.timeScale = SPEEDS[G.speedKey] || 1;
+    G.timeScale = speedScale(G.speedKey);
+    /* Con escala 0 el secuenciador se congelaria: la animacion en curso se corta. */
+    if (G.timeScale === 0 && G.busy) skipAnim();
   };
   $('speed').value = G.speedKey;
-  G.timeScale = SPEEDS[G.speedKey] || 1;
+  G.timeScale = speedScale(G.speedKey);
   UI.sound.onclick = function () {
     armSound();
     const m = !SFX.isMuted();
@@ -1329,7 +1368,8 @@ function applyThemeVars() {
 window.__BC = {
   G: G, Engine: Engine, AI: AI, FX: FX, SFX: SFX, THEME: THEME, SPR: SPR,
   startMove: startMove, skipAnim: skipAnim, newGame: newGame, undo: undo,
-  pickSquare: pickSquare, anchorOfIdx: anchorOfIdx, syncUI: syncUI,
+  pickSquare: pickSquare, anchorOfIdx: anchorOfIdx, anchorOf: anchorOf, syncUI: syncUI,
+  pix: function () { return L.pix; },
   setFlip: function (v) { flip = !!v; boardDirty = true; },
   setState: function (st) { G.state = st; G.hist = [Engine.key(st)]; G.stack = []; G.log = []; G.over = null; G.sel = -1; G.targets = []; G.last = null; G.busy = false; anim = null; FX.reset(); syncUI(); },
   get anim() { return anim; },

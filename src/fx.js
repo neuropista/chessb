@@ -727,36 +727,74 @@ const FX = (function () {
     a = clamp01(a);
     if (a <= 0.01 || s <= 0.01) return;
 
-    var size = Math.max(8, Math.round(26 * s));
-    var tilt = -0.12 + 0.06 * Math.sin(t * TAU * 2);
+    var size = Math.max(10, Math.round(30 * s));
+    /* La inclinacion se cuantiza: un giro continuo curvaria los bordes y
+       delataria que el texto no es pixel art. */
+    var tilt = Math.round((-0.12 + 0.06 * Math.sin(t * TAU * 2)) / QSTEP) * QSTEP;
+
+    /* El rotulo se compone en un lienzo pequeno y se amplia con vecino mas
+       cercano, para que los bordes queden en la rejilla como los sprites. */
+    var layer = wordLayer(text, size, color || '#ffd23f');
+    if (!layer) return;
 
     ctx.save();
     ctx.globalAlpha = a;
     ctx.translate(snap(x, 2), snap(y, 2));
-    ctx.rotate(tilt);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif';
-    ctx.lineJoin = 'round';
-    ctx.miterLimit = 2;
-
-    // sombra dura desplazada
-    ctx.fillStyle = '#15151f';
-    ctx.fillText(text, 3, 4);
-    // borde grueso
-    ctx.lineWidth = Math.max(4, size * 0.28);
-    ctx.strokeStyle = '#15151f';
-    ctx.strokeText(text, 0, 0);
-    // borde interior claro
-    ctx.lineWidth = Math.max(2, size * 0.10);
-    ctx.strokeStyle = '#ffffff';
-    ctx.strokeText(text, 0, 0);
-    // relleno
-    ctx.fillStyle = color || '#ffd23f';
-    ctx.fillText(text, 0, 0);
-
+    if (tilt) ctx.rotate(tilt);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(layer.cv, -(layer.w * WORD_PIX) / 2, -(layer.h * WORD_PIX) / 2,
+      layer.w * WORD_PIX, layer.h * WORD_PIX);
+    ctx.imageSmoothingEnabled = true;
     ctx.globalAlpha = 1;
     ctx.restore();
+  }
+
+  /* --- rotulos comicos rasterizados a baja resolucion (cache pequena) --- */
+  var WORD_PIX = 2;                 // cada pixel del rotulo mide 2 px en pantalla
+  var QSTEP = Math.PI / 32;         // paso de cuantizacion de la inclinacion
+  var wordCache = Object.create(null);
+  var wordOrder = [];
+
+  function wordLayer(text, size, color) {
+    var lo = Math.max(4, Math.round(size / WORD_PIX));   // altura en "pixeles gordos"
+    var key = text + '|' + lo + '|' + color;
+    var hit = wordCache[key];
+    if (hit) return hit;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+
+    var cv = document.createElement('canvas');
+    var g = cv.getContext('2d');
+    if (!g) return null;
+    g.font = 'bold ' + lo + 'px Arial, Helvetica, sans-serif';
+    var pad = Math.max(3, Math.round(lo * 0.42));
+    var w = Math.ceil(g.measureText(text).width) + pad * 2;
+    var h = lo + pad * 2;
+    cv.width = w; cv.height = h;
+    g = cv.getContext('2d');
+    g.font = 'bold ' + lo + 'px Arial, Helvetica, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineJoin = 'round';
+    g.miterLimit = 2;
+    var cx = w / 2, cy = h / 2;
+    g.fillStyle = '#15151f';
+    g.fillText(text, cx + 1, cy + 1);
+    g.lineWidth = Math.max(2, lo * 0.26);
+    g.strokeStyle = '#15151f';
+    g.strokeText(text, cx, cy);
+    if (lo >= 14) {                       // el filete blanco solo cabe si hay sitio
+      g.lineWidth = Math.max(1, lo * 0.08);
+      g.strokeStyle = '#ffffff';
+      g.strokeText(text, cx, cy);
+    }
+    g.fillStyle = color;
+    g.fillText(text, cx, cy);
+
+    var entry = { cv: cv, w: w, h: h };
+    wordCache[key] = entry;
+    wordOrder.push(key);
+    while (wordOrder.length > 48) delete wordCache[wordOrder.shift()];
+    return entry;
   }
 
   // ---------- dibujo directo: fogonazo ----------
