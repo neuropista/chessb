@@ -2,7 +2,24 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
+import { execSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+
+/* Playwright puede estar instalado globalmente: se busca en varios sitios. */
+async function loadPlaywright() {
+  for (const m of ['playwright', 'playwright-core']) {
+    try { return await import(m); } catch (e) { /* siguiente */ }
+  }
+  try {
+    const root = execSync('npm root -g', { encoding: 'utf8' }).trim();
+    return await import(pathToFileURL(root + '/playwright/index.js').href);
+  } catch (e) {
+    console.error('Falta Playwright. Instalalo con:  npm i -D playwright');
+    process.exit(2);
+  }
+}
+const pw = await loadPlaywright();
+const chromium = pw.chromium || (pw.default && pw.default.chromium);
 
 const OUT = process.argv[2] || '.shots/sprites.png';
 mkdirSync('.shots', { recursive: true });

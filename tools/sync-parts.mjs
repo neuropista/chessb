@@ -18,7 +18,7 @@ if (existsSync(join(SP, 'tests'))) {
     s = s.replaceAll(SP + '/parts/', new URL('../src/', import.meta.url).pathname.replace(process.cwd() + '/', ''));
     s = s.replaceAll(SP + '/tests/', './tests/');
     s = s.replaceAll(SP + '/parts', 'src');
-    writeFileSync(join('tests', f), s);
+    writeFileSync(join('tests', f.replace(/\.js$/, '.cjs')), s);
     n++;
   }
 }

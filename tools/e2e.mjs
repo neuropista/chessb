@@ -1,11 +1,28 @@
 /* Pruebas de extremo a extremo del juego en Chromium (sin servidor). */
-import { chromium } from 'playwright';
+import { execSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+
+/* Playwright puede estar instalado globalmente: se busca en varios sitios. */
+async function loadPlaywright() {
+  for (const m of ['playwright', 'playwright-core']) {
+    try { return await import(m); } catch (e) { /* siguiente */ }
+  }
+  try {
+    const root = execSync('npm root -g', { encoding: 'utf8' }).trim();
+    return await import(pathToFileURL(root + '/playwright/index.js').href);
+  } catch (e) {
+    console.error('Falta Playwright. Instalalo con:  npm i -D playwright');
+    process.exit(2);
+  }
+}
+const pw = await loadPlaywright();
+const chromium = pw.chromium || (pw.default && pw.default.chromium);
 import { resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 
 const SHOTS = process.env.SHOTS || '.shots';
 mkdirSync(SHOTS, { recursive: true });
-const URL = 'file://' + resolve('index.html');
+const URL = 'file://' + resolve(process.env.PAGE||'index.html');
 let fails = 0;
 const ok = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fails++; };
 
@@ -125,11 +142,12 @@ const selfplay = await page.evaluate(async () => {
   document.getElementById('level').dispatchEvent(new Event('change'));
   document.getElementById('mode').value = 'aa';
   document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.G.aiDelay = 0;
   const res = [];
   for (let g = 0; g < 3; g++) {
     B.newGame();
     const t0 = performance.now();
-    while (!B.G.over && B.G.log.length < 300 && performance.now() - t0 < 90000) {
+    while (!B.G.over && B.G.log.length < 260 && performance.now() - t0 < 60000) {
       await new Promise(r => requestAnimationFrame(r));
     }
     res.push({ plies: B.G.log.length, result: B.G.over ? B.G.over.result : 'limite', ms: Math.round(performance.now() - t0) });
@@ -144,6 +162,7 @@ const perf = await page.evaluate(async () => {
   const B = window.__BC;
   document.getElementById('speed').value = 'rapido';
   document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.G.aiDelay = 0.05;
   B.newGame();
   const t0 = performance.now(); let frames = 0; let worst = 0; let prev = t0;
   while (performance.now() - t0 < 6000 && !B.G.over) {

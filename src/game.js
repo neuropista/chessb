@@ -51,20 +51,20 @@ function buildSheets() {
 
 /* ------------------------------------------------------- proyeccion 2.5D  */
 /* Perspectiva de un punto: v=0 fila mas lejana, v=1 borde frontal.          */
-const CAM = { focal: 1.0, depth: 0.95 };
+const CAM = { focal: 1.0, depth: 0.78 };
 const L = { w: 0, h: 0, cx: 0, halfW: 0, frontY: 0, horizon: 0, sqW: 0, pix: 0 };
 
 function sAt(v) { return CAM.focal / (CAM.focal + (1 - v) * CAM.depth); }
 
 function layout(w, h) {
   L.w = w; L.h = h; L.cx = w / 2;
-  L.frontY = h * 0.955;
-  const backY = h * 0.255;
+  L.frontY = h * 0.925;
+  const backY = h * 0.175;
   const sFar = sAt(0);
   L.horizon = (backY - sFar * L.frontY) / (1 - sFar);
-  L.halfW = Math.min(w * 0.475, h * 0.90);
+  L.halfW = Math.min(w * 0.472, h * 0.98);
   L.sqW = (2 * L.halfW) / 8;
-  L.pix = (L.sqW / 24) * 1.18;   // tamano de un pixel de sprite en el borde frontal
+  L.pix = (L.sqW / 24) * 0.98;   // tamano de un pixel de sprite en el borde frontal
 }
 
 function proj(u, v) {
@@ -186,6 +186,7 @@ const G = {
   banner: null,      // {text, sub, t, life, tone}
   hover: -1,
   aiTimer: 0,
+  aiDelay: 0.28,
   thinking: false
 };
 
@@ -681,7 +682,7 @@ function afterMove() {
     return;
   }
   if (st.check) { sfx('check'); showBanner('¡JAQUE!', 'El ' + (G.state.turn === 'w' ? 'Monarca blanco' : 'Monarca negro') + ' esta amenazado', 'check'); }
-  if (isAI(G.state.turn)) { G.thinking = true; G.aiTimer = 0.28; }
+  if (isAI(G.state.turn)) { G.thinking = true; G.aiTimer = G.aiDelay; }
 }
 
 function doAIMove() {
@@ -706,7 +707,7 @@ function newGame() {
   G.promo = null; G.banner = null; G.thinking = false; G.aiTimer = 0;
   FX.reset();
   syncUI();
-  if (isAI(G.state.turn)) { G.thinking = true; G.aiTimer = 0.5; }
+  if (isAI(G.state.turn)) { G.thinking = true; G.aiTimer = Math.max(G.aiDelay, 0.4); }
 }
 
 function undo() {
@@ -822,16 +823,16 @@ function buildBoard() {
   g.font = 'bold ' + Math.max(9, Math.round(L.sqW * 0.20)) + 'px ui-monospace, monospace';
   g.textAlign = 'center'; g.textBaseline = 'top';
   for (let sc = 0; sc < 8; sc++) {
-    const p = proj(-1 + (sc + 0.5) / 4, 1.018);
+    const p = proj(-1 + (sc + 0.5) / 4, 1);
     const file = String.fromCharCode(97 + (flip ? 7 - sc : sc));
-    g.fillText(file, p.x, p.y + 2);
+    g.fillText(file, p.x, L.frontY + Math.max(6, L.h * 0.012));
   }
   g.textAlign = 'right'; g.textBaseline = 'middle';
   for (let sr = 0; sr < 8; sr++) {
-    const p = proj(-1.03, (sr + 0.5) / 8);
+    const p = proj(-1, (sr + 0.5) / 8);
     const rank = flip ? sr + 1 : 8 - sr;
-    g.font = 'bold ' + Math.max(8, Math.round(L.sqW * 0.19 * p.s)) + 'px ui-monospace, monospace';
-    g.fillText(String(rank), p.x - 3, p.y);
+    g.font = 'bold ' + Math.max(8, Math.round(L.sqW * 0.20 * p.s)) + 'px ui-monospace, monospace';
+    g.fillText(String(rank), p.x - 5, p.y);
   }
   g.restore();
   boardDirty = false;
@@ -905,9 +906,13 @@ function collectRenderables(time) {
     if (anim && anim.hide.has(i)) continue;
     const p = idxToRC(i);
     /* respiracion: las huestes nunca estan del todo quietas */
-    const lift = breathe * (0.5 + 0.5 * Math.sin(time * 1.6 + i * 0.83));
+    let lift = breathe * (0.5 + 0.5 * Math.sin(time * 1.6 + i * 0.83));
+    /* la pieza apuntada o elegida se despega del suelo: deja claro que casilla es */
+    const mine = pc.c === G.state.turn && !G.busy && !G.over;
+    if (i === G.sel) lift += 3.4 + 0.6 * Math.sin(time * 7);
+    else if (i === G.hover && mine) lift += 1.8;
     list.push({
-      sr: p.sr, sc: p.sc, t: pc.t, c: pc.c, lift: 0, sh: pc.t === 'r' ? 1.15 : 1,
+      sr: p.sr, sc: p.sc, t: pc.t, c: pc.c, lift: lift, sh: pc.t === 'r' ? 1.15 : 1,
       o: { frame: 'idle', flipX: pc.c === 'b', lift: lift }
     });
   }
@@ -947,8 +952,8 @@ function render(time) {
     const rad = L.sqW * c.s;
     const grd = g.createRadialGradient(c.x, c.y - rad * 0.55, rad * 0.55, c.x, c.y - rad * 0.55, rad * 3.1);
     grd.addColorStop(0, 'rgba(0,0,0,0)');
-    grd.addColorStop(0.45, 'rgba(0,0,0,' + (0.30 * anim.spot).toFixed(3) + ')');
-    grd.addColorStop(1, 'rgba(0,0,0,' + (0.62 * anim.spot).toFixed(3) + ')');
+    grd.addColorStop(0.45, 'rgba(0,0,0,' + (0.24 * anim.spot).toFixed(3) + ')');
+    grd.addColorStop(1, 'rgba(0,0,0,' + (0.52 * anim.spot).toFixed(3) + ')');
     g.fillStyle = grd;
     g.fillRect(0, 0, L.w, L.h);
     for (const a of anim.actors) {
@@ -978,11 +983,14 @@ function render(time) {
   }
 
   /* vinieta */
-  const vg = g.createRadialGradient(L.cx, L.h * 0.55, L.h * 0.30, L.cx, L.h * 0.55, L.h * 0.92);
+  const vg = g.createRadialGradient(L.cx, L.h * 0.56, L.h * 0.46, L.cx, L.h * 0.56, L.h * 1.02);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
   vg.addColorStop(1, THEME.scene.vignette);
+  g.save();
+  g.globalAlpha = 0.72;
   g.fillStyle = vg;
   g.fillRect(0, 0, L.w, L.h);
+  g.restore();
 }
 
 /* =============================== INTERFAZ ============================== */

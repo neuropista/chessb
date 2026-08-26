@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, existsSync } from 'node:fs';
 
-const files = existsSync('tests') ? readdirSync('tests').filter(f => f.endsWith('.js')).sort() : [];
+const files = existsSync('tests') ? readdirSync('tests').filter(f => f.endsWith('.cjs')).sort() : [];
 if (!files.length) { console.error('no hay pruebas'); process.exit(1); }
 let bad = 0;
 for (const f of files) {
