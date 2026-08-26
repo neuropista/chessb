@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Ajedrez de fantasia medieval con combates animados en cada captura, al estilo del clasico Battle Chess. Un unico archivo HTML, sin dependencias.">
+<title>Battle Chess — Ajedrez de Batalla</title>
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<header class="hud">
+  <h1 class="logo"><span>BATTLE</span> CHESS</h1>
+  <div id="turn" class="badge w">TURNO BLANCO</div>
+  <div class="controls">
+    <label>Modo
+      <select id="mode" aria-label="Modo de juego">
+        <option value="ha">Humano vs IA</option>
+        <option value="hh">Humano vs Humano</option>
+        <option value="ah">IA vs Humano</option>
+        <option value="aa">IA vs IA</option>
+      </select>
+    </label>
+    <label>IA
+      <select id="level" aria-label="Nivel de la IA">
+        <option value="1">Escudero</option>
+        <option value="2">Caballero</option>
+        <option value="3">Gran Maestre</option>
+      </select>
+    </label>
+    <label>Ritmo
+      <select id="speed" aria-label="Ritmo de las animaciones">
+        <option value="epico">Epico</option>
+        <option value="normal">Normal</option>
+        <option value="rapido">Rapido</option>
+        <option value="sin">Sin combate</option>
+      </select>
+    </label>
+    <button id="new" title="Nueva partida (N)">&#9876; Nueva</button>
+    <button id="undo" title="Deshacer (U)">&#8624; Deshacer</button>
+    <button id="flip" title="Girar el tablero (F)">&#8645; Girar</button>
+    <button id="sound" aria-pressed="false" title="Silenciar (M)">&#128266; Sonido</button>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="board" aria-label="Tablero de ajedrez"></canvas>
+    <div id="hint" class="hint">Clic o <b>Espacio</b> para acelerar el combate <button id="skip">Saltar</button></div>
+    <div id="banner" class="banner"><div id="bannerT"></div><div id="bannerS"></div></div>
+    <div id="promo" class="promo"><div class="promoBox"><p>&#9819; Elige la pieza de coronacion</p><div id="promoRow"></div></div></div>
+  </div>
+  <aside class="panel">
+    <div id="status" class="status"></div>
+    <section><h2>Botin de las blancas</h2><div id="capW" class="captured"></div></section>
+    <section><h2>Botin de las negras</h2><div id="capB" class="captured"></div></section>
+    <div id="material" class="material"></div>
+    <section class="movesWrap"><h2>Cronica de la batalla</h2><ol id="moves" class="movelist"></ol></section>
+    <p class="help">Haz clic en una pieza y luego en su destino.<br><b>Espacio</b> acelera el combate &middot; <b>U</b> deshacer &middot; <b>N</b> nueva &middot; <b>F</b> girar &middot; <b>M</b> silenciar</p>
+  </aside>
+</main>
+<noscript><p style="padding:20px">Este juego necesita JavaScript activado.</p></noscript>
+<script>
+(function () {
+'use strict';
+/*__JS__*/
+})();
+</script>
+</body>
+</html>
