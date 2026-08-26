@@ -377,6 +377,103 @@ const vsAi = await page.evaluate(async () => {
 ok(vsAi.plies >= 20 && vsAi.capturadas >= 1, 'IA vs IA con animaciones completas: ' + vsAi.plies + ' jugadas, ' + vsAi.capturadas + ' piezas cobradas en combate');
 await page.screenshot({ path: SHOTS + '/05-partida.png' });
 
+console.log('\n== 19. Deshacer no congela la partida cuando el turno vuelve a la IA ==');
+const undoAI = await page.evaluate(async () => {
+  const B = window.__BC;
+  const out = {};
+  const settle = async (ms) => {
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) await new Promise(r => requestAnimationFrame(r));
+  };
+  for (const mode of ['ah', 'aa', 'ha']) {
+    document.getElementById('speed').value = 'sin';
+    document.getElementById('speed').dispatchEvent(new Event('change'));
+    document.getElementById('level').value = '1';
+    document.getElementById('level').dispatchEvent(new Event('change'));
+    document.getElementById('mode').value = mode;
+    document.getElementById('mode').dispatchEvent(new Event('change'));
+    B.G.aiDelay = 0.02;
+    B.newGame();
+    // dejar que se jueguen unas cuantas jugadas
+    const t0 = performance.now();
+    while (B.G.log.length < (mode === 'ha' ? 1 : 4) && performance.now() - t0 < 12000) {
+      if (mode === 'ha' && !B.busy && B.G.state.turn === 'w') {
+        const ms = B.Engine.legalMoves(B.G.state);
+        B.startMove(ms[0]);
+      }
+      await new Promise(r => requestAnimationFrame(r));
+    }
+    const before = B.G.log.length;
+    const pilaAntes = B.G.stack.length;
+    document.getElementById('undo').click();
+    await settle(1800);
+    /* La congelacion es exactamente esto: le toca a la IA y no hay nada
+       programado ni en curso que vaya a moverla. */
+    const turn = B.G.state.turn;
+    const esIA = mode === 'aa' || (mode === 'ha' && turn === 'b') || (mode === 'ah' && turn === 'w');
+    out[mode] = {
+      antes: before, despues: B.G.log.length, pilaAntes, pila: B.G.stack.length,
+      congelada: esIA && !B.G.thinking && !B.busy && !B.G.over
+    };
+  }
+  return out;
+});
+for (const m of ['ah', 'aa', 'ha']) {
+  const r = undoAI[m];
+  ok(r && r.antes > 0 && !r.congelada,
+    'modo ' + m + ': tras deshacer la partida sigue viva (' + r.antes + ' -> ' + r.despues +
+    ' jugadas, pila ' + r.pilaAntes + ' -> ' + r.pila + ')');
+}
+
+console.log('\n== 20. Girar el tablero durante un combate no corrompe la escena ==');
+const flipMid = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'epico';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+  for (let i = 0; i < 25; i++) await new Promise(r => requestAnimationFrame(r));
+  const btnDisabled = document.getElementById('flip').disabled;
+  document.getElementById('flip').click();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }));
+  const actorSr = B.anim && B.anim.actors[0] ? B.anim.actors[0].sr : -1;
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 12000) await new Promise(r => requestAnimationFrame(r));
+  // ahora, en reposo, girar SI debe funcionar
+  const okBefore = B.G.log[0];
+  document.getElementById('flip').click();
+  const a = B.anchorOfIdx(27);
+  return { btnDisabled, actorSr, log: okBefore, girado: B.pickSquare(a.x, a.y) === 27 };
+});
+ok(flipMid.btnDisabled, 'el boton Girar se deshabilita mientras hay combate');
+ok(flipMid.log === 'exd5' && flipMid.girado, 'el combate termina bien y girar en reposo sigue funcionando');
+
+console.log('\n== 21. El teclado no roba la tecla a los controles enfocados ==');
+const kbFocus = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'sin';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.newGame();
+  B.startMove(B.Engine.legalMoves(B.G.state)[0]);
+  await new Promise(r => setTimeout(r, 80));
+  const antes = B.G.log.length;
+  const btn = document.getElementById('undo');
+  btn.focus();
+  let defaultPrevented = false;
+  const probe = (ev) => { defaultPrevented = ev.defaultPrevented; };
+  window.addEventListener('keydown', probe, true);
+  btn.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+  window.removeEventListener('keydown', probe, true);
+  const evt = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  const noPrevent = btn.dispatchEvent(evt) && !evt.defaultPrevented;
+  return { antes, noPrevent, foco: document.activeElement === btn };
+});
+ok(kbFocus.noPrevent && kbFocus.foco, 'con el boton Deshacer enfocado, Espacio no queda interceptado');
+
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');
 

@@ -714,17 +714,21 @@ function newGame() {
 
 function undo() {
   if (G.busy || !G.stack.length) return;
-  const back = (G.mode === 'ha' || G.mode === 'ah') && G.stack.length >= 2 ? 2 : 1;
-  for (let i = 0; i < back; i++) {
+  /* Se retrocede al menos una jugada y, si hay un humano en la partida, hasta
+     que le vuelva a tocar a el. */
+  for (let i = 0; i < 8 && G.stack.length; i++) {
     const s = G.stack.pop();
-    if (!s) break;
     G.state = s.state; G.log = s.log; G.hist = s.hist;
     G.captured.w = s.capW; G.captured.b = s.capB; G.last = s.last;
+    if (G.mode === 'aa' || !isAI(G.state.turn)) break;
   }
   G.over = null; G.sel = -1; G.targets = []; G.thinking = false; G.aiTimer = 0;
   hideBanner();
   closePromo();
   FX.reset();
+  /* Si el turno restaurado es de la IA (modos 'ah' y 'aa', o el principio de
+     la partida), hay que volver a darle cuerda: nadie mas lo hara. */
+  if (isAI(G.state.turn)) { G.thinking = true; G.aiTimer = Math.max(G.aiDelay, 0.4); }
   syncUI();
 }
 
@@ -1058,6 +1062,7 @@ function syncUI() {
   }
   UI.moves.scrollTop = UI.moves.scrollHeight;
   UI.undo.disabled = !G.stack.length || G.busy;
+  if (UI.flip) UI.flip.disabled = G.busy;
   UI.hint.style.display = (G.busy && anim && anim.move && anim.move.cap) ? 'block' : 'none';
 }
 
@@ -1121,6 +1126,15 @@ function onPick(i) {
   }
 }
 
+/* Girar durante una animacion dejaria a los actores en coordenadas de pantalla
+   obsoletas (las casillas se reflejan pero los actores ya estan proyectados). */
+function toggleFlip() {
+  if (G.busy) return;
+  flip = !flip;
+  boardDirty = true;
+  syncUI();
+}
+
 function skipAnim() {
   if (!anim) return;
   try { seqSkip(anim.seq); } catch (e) { }
@@ -1147,14 +1161,20 @@ function bindInput() {
   });
   cv.addEventListener('pointerleave', function () { G.hover = -1; });
   window.addEventListener('keydown', function (ev) {
-    armSound();
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const tag = ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '';
+    /* Con un boton o un desplegable enfocado, el teclado es suyo. */
+    const onControl = tag === 'button' || tag === 'select' || tag === 'input' || tag === 'textarea';
     const k = ev.key.toLowerCase();
+    if (k === 'escape') { closePromo(); G.sel = -1; G.targets = []; syncUI(); return; }
+    if (onControl) return;
+    armSound();
     if (k === ' ' || k === 'enter') { ev.preventDefault(); if (G.busy) skipAnim(); }
     else if (k === 'u') undo();
-    else if (k === 'n') newGame();
-    else if (k === 'f') { flip = !flip; boardDirty = true; }
+    else if (k === 'n') { hideBanner(); newGame(); }
+    else if (k === 'f') toggleFlip();
     else if (k === 'm') { UI.sound.click(); }
-    else if (k === 'escape') { closePromo(); G.sel = -1; G.targets = []; }
+    else return;
     syncUI();
   });
 }
@@ -1217,7 +1237,8 @@ function init() {
     turn: $('turn'), status: $('status'), capW: $('capW'), capB: $('capB'),
     material: $('material'), moves: $('moves'), undo: $('undo'),
     banner: $('banner'), bannerT: $('bannerT'), bannerS: $('bannerS'),
-    promo: $('promo'), promoRow: $('promoRow'), sound: $('sound'), hint: $('hint')
+    promo: $('promo'), promoRow: $('promoRow'), sound: $('sound'), hint: $('hint'),
+    flip: $('flip')
   };
   G.reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   if (G.reduced) { G.speedKey = 'rapido'; }
@@ -1230,7 +1251,7 @@ function init() {
 
   $('new').onclick = function () { armSound(); hideBanner(); newGame(); };
   UI.undo.onclick = function () { armSound(); hideBanner(); undo(); };
-  $('flip').onclick = function () { flip = !flip; boardDirty = true; };
+  $('flip').onclick = function () { toggleFlip(); };
   $('mode').onchange = function (e) { G.mode = e.target.value; hideBanner(); newGame(); };
   $('mode').value = G.mode;
   $('level').onchange = function (e) { G.aiLevel = parseInt(e.target.value, 10) || 2; };
