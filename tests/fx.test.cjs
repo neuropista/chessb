@@ -30,7 +30,8 @@ var PROPS = [
 var errors = [];
 function fail(msg) { errors.push(msg); }
 
-function makeCtx() {
+function makeCtx(canvasW, canvasH) {
+  var fakeCanvas = { width: canvasW || 800, height: canvasH || 600 };
   var log = {
     depth: 0, maxDepth: 0, saves: 0, restores: 0, calls: 0,
     shadowUsed: false, filterUsed: false, badAccess: [], stack: []
@@ -88,6 +89,9 @@ function makeCtx() {
       if (PROPS.indexOf(key) >= 0) return state[key];
       if (key === '__log') return log;
       if (key === '__state') return state;
+      /* ctx.canvas SI forma parte de la API 2D estandar: drawFlash lo usa para
+         rellenar en pixeles de dispositivo cuando anula la transformada. */
+      if (key === 'canvas') return fakeCanvas;
       log.badAccess.push('get ' + String(key));
       throw new Error('Acceso fuera de la API 2D estandar: get ' + String(key));
     },
