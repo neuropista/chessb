@@ -79,6 +79,7 @@ const Engine = (function () {
 
   // ---------- Ataques ----------
   function attackedOn(b, sq, by) {
+    if (sq < 0 || sq > 63) return false;   // posicion sin rey (FEN invalido): no revienta
     let i, p;
     const pa = by === "w" ? PATT_W[sq] : PATT_B[sq];
     for (i = 0; i < pa.length; i++) {

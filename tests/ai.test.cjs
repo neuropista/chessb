@@ -9,8 +9,11 @@ var src = fs.readFileSync(path.join(root, 'src', 'engine.js'), 'utf8') + '\n' +
 var mod = (new Function('"use strict";' + src + '\nreturn { Engine: Engine, AI: AI };'))();
 var Engine = mod.Engine, AI = mod.AI;
 
-var GAMES = parseInt(process.env.AI_GAMES || '12', 10);
-var MAXPLY = parseInt(process.env.AI_PLIES || '110', 10);
+var GAMES = parseInt(process.env.AI_GAMES || '30', 10);
+var MAXPLY = parseInt(process.env.AI_PLIES || '140', 10);
+/* En el autojuego se recorta el presupuesto de busqueda (AI.pick acepta
+   opts.budgetMs); el presupuesto real de partida se mide aparte, mas abajo. */
+var BUDGET = parseInt(process.env.AI_BUDGET || '80', 10);
 
 var fails = 0;
 function ok(c, m) { console.log((c ? '  PASS  ' : '  FAIL  ') + m); if (!c) fails++; }
@@ -36,7 +39,7 @@ for (var g = 0; g < GAMES; g++) {
     var set = {};
     for (var i = 0; i < legal.length; i++) set[legalKey(legal[i])] = 1;
     var t0 = Date.now(), mv = null;
-    try { mv = AI.pick(s, level, hist); } catch (e) { threw++; break; }
+    try { mv = AI.pick(s, level, hist, { budgetMs: BUDGET }); } catch (e) { threw++; break; }
     var dt = Date.now() - t0;
     if (level === 3) { totalMs += dt; picks++; if (dt > worst) worst = dt; }
     if (!mv || !set[legalKey(mv)]) { illegal++; break; }
@@ -52,12 +55,25 @@ ok(illegal === 0, 'ningun movimiento ilegal (' + plies + ' jugadas)');
 ok(threw === 0, 'ninguna excepcion');
 var score = (wins[3] + wins.draw * 0.5) / GAMES;
 ok(score >= 0.8, 'el nivel 3 puntua ' + (score * 100).toFixed(0) + '% contra el nivel 1 (' + wins[3] + ' victorias, ' + wins.draw + ' tablas, ' + wins[1] + ' derrotas)');
-ok(worst < 900, 'peor tiempo de decision del nivel 3: ' + worst + ' ms (media ' + Math.round(totalMs / Math.max(1, picks)) + ' ms)');
+ok(worst < BUDGET + 300, 'con presupuesto de ' + BUDGET + ' ms el peor tiempo fue ' + worst + ' ms (media ' + Math.round(totalMs / Math.max(1, picks)) + ' ms)');
+
+console.log('\n== Presupuesto real de partida (nivel 3, sin recortar) ==');
+var s3 = Engine.newGame(), h3 = [Engine.key(s3)], w3 = 0, t3 = 0, n3 = 0;
+for (var q = 0; q < 12 && !Engine.status(s3, h3).over; q++) {
+  var q0 = Date.now();
+  var qm = AI.pick(s3, 3, h3);
+  var qd = Date.now() - q0;
+  if (!qm) break;
+  if (qd > w3) w3 = qd;
+  t3 += qd; n3++;
+  s3 = Engine.makeMove(s3, qm); h3.push(Engine.key(s3));
+}
+ok(w3 < 900 && n3 >= 10, n3 + ' jugadas seguidas: media ' + Math.round(t3 / Math.max(1, n3)) + ' ms, peor ' + w3 + ' ms (limite 900)');
 
 console.log('\n== Mate en 1 ==');
 var MATES = [
   ['6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1', 'torre a la octava'],
-  ['6k1/5ppp/8/8/8/7q/8/6K1 b - - 0 1', 'dama a g2'],
+  ['r5k1/5ppp/8/8/8/8/5PPP/6K1 b - - 0 1', 'mate del pasillo con torre'],
   ['3k4/8/3K4/8/8/8/8/7R w - - 0 1', 'torre a la octava con oposicion']
 ];
 for (var mi = 0; mi < MATES.length; mi++) {
