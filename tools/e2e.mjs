@@ -474,6 +474,97 @@ const kbFocus = await page.evaluate(async () => {
 });
 ok(kbFocus.noPrevent && kbFocus.foco, 'con el boton Deshacer enfocado, Espacio no queda interceptado');
 
+console.log('\n== 22. El lienzo nunca desborda su contenedor ==');
+const sizes = [[1280, 800], [1024, 700], [900, 600], [800, 400], [420, 860], [380, 700], [1400, 320]];
+let overflow = [];
+for (const [w, h] of sizes) {
+  await page.setViewportSize({ width: w, height: h });
+  await page.waitForTimeout(220);
+  const r = await page.evaluate(() => {
+    const cvv = document.getElementById('board');
+    const st = document.getElementById('stage');
+    const c = cvv.getBoundingClientRect(), s = st.getBoundingClientRect();
+    return {
+      dx: Math.round(c.width - s.width), dy: Math.round(c.height - s.height),
+      hScroll: document.documentElement.scrollWidth > window.innerWidth + 1
+    };
+  });
+  if (r.dy > 1 || r.dx > 1 || r.hScroll) overflow.push(w + 'x' + h + ' -> sobra ' + r.dx + 'x' + r.dy + (r.hScroll ? ' + scroll horizontal' : ''));
+}
+ok(overflow.length === 0, 'siete tamanos sin recorte del tablero' + (overflow.length ? ' -> ' + overflow.join(' | ') : ''));
+
+console.log('\n== 23. La ultima fila sigue siendo pulsable en ventana baja ==');
+await page.setViewportSize({ width: 800, height: 400 });
+await page.waitForTimeout(250);
+const lowRow = await page.evaluate(() => {
+  const B = window.__BC;
+  const cvv = document.getElementById('board');
+  const r = cvv.getBoundingClientRect();
+  const bad = [];
+  for (let i = 56; i < 64; i++) {              // fila 1: a1..h1
+    const a = B.anchorOfIdx(i);
+    if (a.y > r.height + 1 || a.x < 0 || a.x > r.width + 1) bad.push(B.Engine.sqName(i));
+    if (B.pickSquare(a.x, a.y) !== i) bad.push(B.Engine.sqName(i) + '(hit)');
+  }
+  return bad;
+});
+ok(lowRow.length === 0, 'a1..h1 dentro del lienzo y pulsables a 800x400' + (lowRow.length ? ' -> ' + lowRow.join(',') : ''));
+
+console.log('\n== 24. Rendimiento en pantalla HiDPI (devicePixelRatio 2) ==');
+const hidpi = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
+const hidpiErr = [];
+hidpi.on('pageerror', e => hidpiErr.push(e.message));
+await hidpi.goto(URL);
+await hidpi.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const hp = await hidpi.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'aa';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('level').value = '1';
+  document.getElementById('level').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.G.aiDelay = 0.02;
+  B.newGame();
+  const t0 = performance.now(); let frames = 0;
+  while (performance.now() - t0 < 5000 && !B.G.over) {
+    await new Promise(r => requestAnimationFrame(r));
+    frames++;
+  }
+  return { fps: Math.round(frames / ((performance.now() - t0) / 1000)), dpr: window.devicePixelRatio };
+});
+ok(hp.fps >= 45 && hidpiErr.length === 0, 'dpr ' + hp.dpr + ': ' + hp.fps + ' fps con animaciones (minimo 45)');
+
+console.log('\n== 25. El fogonazo cubre todo el lienzo con DPR 2 ==');
+const flashCov = await hidpi.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'epico';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+  const cvv = document.getElementById('board');
+  const g = cvv.getContext('2d');
+  let best = 0, seen = 0;
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 14000) {
+    await new Promise(r => requestAnimationFrame(r));
+    const f = B.anim && B.anim.flash;
+    if (f && f > 0.2) {
+      seen++;
+      /* esquina inferior derecha: la zona que se quedaba sin pintar */
+      const px = g.getImageData(cvv.width - 4, cvv.height - 4, 1, 1).data;
+      const lum = (px[0] + px[1] + px[2]) / 3;
+      if (lum > best) best = lum;
+    }
+  }
+  return { seen, best: Math.round(best) };
+});
+ok(flashCov.seen > 0 && flashCov.best > 90, 'la esquina opuesta se ilumina durante el fogonazo (' + flashCov.seen + ' frames, luminancia ' + flashCov.best + ')');
+await hidpi.close();
+await page.setViewportSize({ width: 1280, height: 800 });
+
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');
 

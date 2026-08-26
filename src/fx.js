@@ -767,9 +767,14 @@ const FX = (function () {
     if (w <= 0 || h <= 0) return;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);   // ignora la sacudida
+    /* Al anular la transformada las medidas pasan a ser de DISPOSITIVO, no CSS:
+       con devicePixelRatio 2 rellenar w x h solo cubriria un cuarto del lienzo. */
+    const cv = ctx.canvas;
+    const fw = cv && cv.width > 0 ? cv.width : w;
+    const fh = cv && cv.height > 0 ? cv.height : h;
     ctx.globalAlpha = a;
     ctx.fillStyle = color || '#ffffff';
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, fw, fh);
     ctx.globalAlpha = 1;
     ctx.restore();
   }

@@ -52,11 +52,13 @@ function buildSheets() {
 /* ------------------------------------------------------- proyeccion 2.5D  */
 /* Perspectiva de un punto: v=0 fila mas lejana, v=1 borde frontal.          */
 const CAM = { focal: 1.0, depth: 0.78 };
+let layoutSerial = 0;   // sube en cada layout(): invalida las capas cacheadas
 const L = { w: 0, h: 0, cx: 0, halfW: 0, frontY: 0, horizon: 0, sqW: 0, pix: 0 };
 
 function sAt(v) { return CAM.focal / (CAM.focal + (1 - v) * CAM.depth); }
 
 function layout(w, h) {
+  layoutSerial++;
   L.w = w; L.h = h; L.cx = w / 2;
   L.frontY = h * 0.925;
   const backY = h * 0.175;
@@ -734,6 +736,8 @@ function undo() {
 
 /* ================================ ESCENA =============================== */
 let cv, ctx, boardCv, boardCtx, DPR = 1, boardDirty = true;
+let vigCv = null;              // vineta prerenderizada
+let spotCv = null, spotKey = '';  // foco del combate prerenderizado
 
 function hashRnd(n) { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
 
@@ -842,7 +846,47 @@ function buildBoard() {
     g.fillText(String(rank), p.x - 5, p.y);
   }
   g.restore();
+  buildVignette();
   boardDirty = false;
+}
+
+/* Rellenar un degradado radial a pantalla completa cuesta ~15 ms con
+   devicePixelRatio 2; pintado una vez y blitado, ~3 ms. */
+function buildVignette() {
+  if (!vigCv) vigCv = mkCanvas(1, 1);
+  vigCv.width = Math.max(1, Math.round(L.w * DPR));
+  vigCv.height = Math.max(1, Math.round(L.h * DPR));
+  const g = vigCv.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, L.w, L.h);
+  const vg = g.createRadialGradient(L.cx, L.h * 0.56, L.h * 0.46, L.cx, L.h * 0.56, L.h * 1.02);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, THEME.scene.vignette);
+  g.globalAlpha = 0.72;
+  g.fillStyle = vg;
+  g.fillRect(0, 0, L.w, L.h);
+}
+
+/* El foco del duelo no cambia de sitio durante el combate: solo su opacidad. */
+function spotLayer(sr, sc) {
+  const key = sr + ',' + sc + ',' + layoutSerial + ',' + DPR;
+  if (spotCv && spotKey === key) return spotCv;
+  if (!spotCv) spotCv = mkCanvas(1, 1);
+  spotCv.width = Math.max(1, Math.round(L.w * DPR));
+  spotCv.height = Math.max(1, Math.round(L.h * DPR));
+  const g = spotCv.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, L.w, L.h);
+  const c = anchorOf(sr, sc);
+  const rad = L.sqW * c.s;
+  const grd = g.createRadialGradient(c.x, c.y - rad * 0.55, rad * 0.55, c.x, c.y - rad * 0.55, rad * 3.1);
+  grd.addColorStop(0, 'rgba(0,0,0,0)');
+  grd.addColorStop(0.45, 'rgba(0,0,0,0.24)');
+  grd.addColorStop(1, 'rgba(0,0,0,0.52)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, L.w, L.h);
+  spotKey = key;
+  return spotCv;
 }
 
 function kingSquare(color) {
@@ -955,14 +999,10 @@ function render(time) {
 
   /* foco dramatico: se oscurece el tablero y los duelistas se vuelven a pintar */
   if (anim && anim.spot > 0.01 && anim.spotAt) {
-    const c = anchorOf(anim.spotAt.sr, anim.spotAt.sc);
-    const rad = L.sqW * c.s;
-    const grd = g.createRadialGradient(c.x, c.y - rad * 0.55, rad * 0.55, c.x, c.y - rad * 0.55, rad * 3.1);
-    grd.addColorStop(0, 'rgba(0,0,0,0)');
-    grd.addColorStop(0.45, 'rgba(0,0,0,' + (0.24 * anim.spot).toFixed(3) + ')');
-    grd.addColorStop(1, 'rgba(0,0,0,' + (0.52 * anim.spot).toFixed(3) + ')');
-    g.fillStyle = grd;
-    g.fillRect(0, 0, L.w, L.h);
+    g.save();
+    g.globalAlpha = clamp(anim.spot, 0, 1);
+    g.drawImage(spotLayer(anim.spotAt.sr, anim.spotAt.sc), 0, 0, L.w, L.h);
+    g.restore();
     for (const a of anim.actors) {
       if (a.hidden) continue;
       drawShadow(g, a.sr, a.sc, a.lift, 0.40, a.t === 'r' ? 1.15 : 1);
@@ -989,15 +1029,8 @@ function render(time) {
     try { FX.drawFlash(g, L.w, L.h, anim.flash * 0.55, THEME.fx.flash); } catch (e) { }
   }
 
-  /* vinieta */
-  const vg = g.createRadialGradient(L.cx, L.h * 0.56, L.h * 0.46, L.cx, L.h * 0.56, L.h * 1.02);
-  vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, THEME.scene.vignette);
-  g.save();
-  g.globalAlpha = 0.72;
-  g.fillStyle = vg;
-  g.fillRect(0, 0, L.w, L.h);
-  g.restore();
+  /* vinieta (capa prerenderizada) */
+  if (vigCv) g.drawImage(vigCv, 0, 0, L.w, L.h);
 }
 
 /* =============================== INTERFAZ ============================== */
@@ -1219,8 +1252,10 @@ function frame(ts) {
 /* =============================== ARRANQUE ============================== */
 function resize() {
   const host = cv.parentElement;
-  const w = Math.max(320, host.clientWidth);
-  const h = Math.max(280, host.clientHeight);
+  /* Nunca inventar un tamano mayor que el contenedor: #stage recorta el
+     desbordamiento y la primera fila del tablero quedaria fuera de vista. */
+  const w = Math.max(1, host.clientWidth);
+  const h = Math.max(1, host.clientHeight);
   DPR = Math.min(2, window.devicePixelRatio || 1);
   cv.width = Math.round(w * DPR);
   cv.height = Math.round(h * DPR);
