@@ -1222,20 +1222,20 @@ function bindInput() {
   window.addEventListener('keydown', function (ev) {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const tag = ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '';
-    /* Con un boton o un desplegable enfocado, el teclado es suyo. */
-    const onControl = tag === 'button' || tag === 'select' || tag === 'input' || tag === 'textarea';
+    /* Un desplegable o un campo de texto usan las letras (busqueda por tecleo);
+       un boton no, asi que los atajos siguen vivos aunque conserve el foco. */
+    const typing = tag === 'select' || tag === 'input' || tag === 'textarea';
     const k = ev.key.toLowerCase();
     if (k === 'escape') { closePromo(); G.sel = -1; G.targets = []; syncUI(); return; }
     if (k === ' ' || k === 'enter') {
       /* Durante el combate la barra siempre acelera, aunque haya un boton
-         enfocado: si no, activaria ese boton en mitad de la animacion. */
-      if (G.busy) { ev.preventDefault(); armSound(); skipAnim(); syncUI(); return; }
-      if (onControl) return;          // fuera del combate el control se queda la tecla
-      ev.preventDefault();
-      armSound();
+         enfocado: si no, activaria ese boton en mitad de la animacion.
+         Fuera del combate no se toca: el control enfocado hace lo suyo y la
+         barra sigue sirviendo para desplazar la pagina en movil. */
+      if (G.busy) { ev.preventDefault(); armSound(); skipAnim(); syncUI(); }
       return;
     }
-    if (onControl) return;
+    if (typing) return;
     armSound();
     if (k === 'u') undo();
     else if (k === 'n') { hideBanner(); newGame(); }
@@ -1290,7 +1290,9 @@ function resize() {
      desbordamiento y la primera fila del tablero quedaria fuera de vista. */
   const w = Math.max(1, host.clientWidth);
   const h = Math.max(1, host.clientHeight);
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (w === L.w && h === L.h && dpr === DPR) return;   // nada que rehacer
+  DPR = dpr;
   cv.width = Math.round(w * DPR);
   cv.height = Math.round(h * DPR);
   cv.style.width = w + 'px';
@@ -1319,6 +1321,11 @@ function init() {
   buildSheets();
   resize();
   window.addEventListener('resize', resize);
+  /* El alto de #stage cambia sin que haya evento 'resize': en el diseno de una
+     columna lo dicta el panel, que crece con las capturas y la cronica. */
+  if (typeof ResizeObserver !== 'undefined') {
+    try { new ResizeObserver(resize).observe(cv.parentElement); } catch (e) { }
+  }
 
   $('new').onclick = function () { armSound(); hideBanner(); newGame(); };
   UI.undo.onclick = function () { armSound(); hideBanner(); undo(); };
@@ -1341,6 +1348,7 @@ function init() {
     const m = !SFX.isMuted();
     SFX.setMuted(m);
     UI.sound.textContent = m ? '🔇 Silencio' : '🔊 Sonido';
+    UI.sound.title = m ? 'Activar el sonido (M)' : 'Silenciar (M)';
     UI.sound.setAttribute('aria-pressed', String(m));
   };
   $('skip').onclick = function () { skipAnim(); };

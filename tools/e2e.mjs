@@ -372,7 +372,13 @@ const vsAi = await page.evaluate(async () => {
     if (B.anim && B.anim.move && B.anim.move.cap && B.anim.rt < 0.05) caps++;
     seen = B.G.log.length;
   }
-  return { plies: seen, caps, capturadas: B.G.captured.w.length + B.G.captured.b.length, over: !!B.G.over };
+  const out = { plies: seen, caps, capturadas: B.G.captured.w.length + B.G.captured.b.length, over: !!B.G.over };
+  /* Se detiene la partida: si la IA sigue jugando en segundo plano, roba CPU a
+     las mediciones de las secciones siguientes. */
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.G.aiDelay = 0.28;
+  return out;
 });
 ok(vsAi.plies >= 20 && vsAi.capturadas >= 1, 'IA vs IA con animaciones completas: ' + vsAi.plies + ' jugadas, ' + vsAi.capturadas + ' piezas cobradas en combate');
 await page.screenshot({ path: SHOTS + '/05-partida.png' });
@@ -548,22 +554,26 @@ const flashCov = await hidpi.evaluate(async () => {
   B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
   const cvv = document.getElementById('board');
   const g = cvv.getContext('2d');
-  let best = 0, seen = 0;
+  const esquina = () => {
+    const px = g.getImageData(cvv.width - 4, cvv.height - 4, 1, 1).data;
+    return (px[0] + px[1] + px[2]) / 3;
+  };
+  let best = 0, seen = 0, reposo = 255;
   const t0 = performance.now();
   while (B.busy && performance.now() - t0 < 14000) {
     await new Promise(r => requestAnimationFrame(r));
-    const f = B.anim && B.anim.flash;
-    if (f && f > 0.2) {
-      seen++;
-      /* esquina inferior derecha: la zona que se quedaba sin pintar */
-      const px = g.getImageData(cvv.width - 4, cvv.height - 4, 1, 1).data;
-      const lum = (px[0] + px[1] + px[2]) / 3;
-      if (lum > best) best = lum;
-    }
+    const f = (B.anim && B.anim.flash) || 0;
+    const lum = esquina();
+    if (f > 0.2) { seen++; if (lum > best) best = lum; }
+    else if (lum < reposo) reposo = lum;      // la misma esquina sin fogonazo
   }
-  return { seen, best: Math.round(best) };
+  return { seen, best: Math.round(best), reposo: Math.round(reposo) };
 });
-ok(flashCov.seen > 0 && flashCov.best > 90, 'la esquina opuesta se ilumina durante el fogonazo (' + flashCov.seen + ' frames, luminancia ' + flashCov.best + ')');
+/* Prueba diferencial: la vineta oscurece esa esquina, asi que lo que importa es
+   que el fogonazo la ilumine, no que alcance un valor absoluto. */
+ok(flashCov.seen > 0 && flashCov.best - flashCov.reposo > 35,
+  'la esquina opuesta se ilumina durante el fogonazo (' + flashCov.seen + ' frames, ' +
+  flashCov.reposo + ' -> ' + flashCov.best + ')');
 await hidpi.close();
 await page.setViewportSize({ width: 1280, height: 800 });
 
@@ -753,6 +763,132 @@ await page.evaluate(() => {
   document.getElementById('speed').value = 'normal';
   document.getElementById('speed').dispatchEvent(new Event('change'));
 });
+
+console.log('\n== 32. El lienzo sigue al contenedor cuando el panel crece ==');
+await page.setViewportSize({ width: 380, height: 700 });
+await page.waitForTimeout(350);
+const grow = await page.evaluate(async () => {
+  const B = window.__BC;
+  const medir = () => {
+    const st = document.getElementById('stage');
+    const cvv = document.getElementById('board');
+    return { stage: Math.round(st.clientHeight), canvas: Math.round(cvv.getBoundingClientRect().height) };
+  };
+  const antes = medir();
+  /* Se juega una partida entera al instante: la cronica y los botines hacen
+     crecer el panel y encoger #stage sin que haya evento 'resize'. */
+  document.getElementById('speed').value = 'sin';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('level').value = '1';
+  document.getElementById('level').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'aa';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.G.aiDelay = 0;
+  B.newGame();
+  const t0 = performance.now();
+  while (B.G.log.length < 60 && !B.G.over && performance.now() - t0 < 30000) {
+    await new Promise(r => requestAnimationFrame(r));
+  }
+  await new Promise(r => requestAnimationFrame(r));
+  await new Promise(r => requestAnimationFrame(r));
+  const despues = medir();
+  return { antes, despues, jugadas: B.G.log.length };
+});
+ok(Math.abs(grow.antes.canvas - grow.antes.stage) <= 1,
+  'al arrancar el lienzo mide lo que #stage (' + grow.antes.canvas + ' vs ' + grow.antes.stage + ')');
+ok(Math.abs(grow.despues.canvas - grow.despues.stage) <= 1,
+  'tras ' + grow.jugadas + ' jugadas sigue midiendo lo que #stage (' + grow.despues.canvas + ' vs ' + grow.despues.stage + ')');
+
+console.log('\n== 33. La fila 1 sigue siendo pulsable con el panel crecido ==');
+const row1 = await page.evaluate(() => {
+  const B = window.__BC;
+  const cvv = document.getElementById('board');
+  const r = cvv.getBoundingClientRect();
+  const fuera = [];
+  for (const i of [56, 57, 60, 63]) {
+    const a = B.anchorOfIdx(i);
+    const px = r.left + a.x, py = r.top + a.y;
+    const el = document.elementFromPoint(px, py);
+    if (!el || el.id !== 'board') fuera.push(B.Engine.sqName(i) + '->' + (el ? (el.id || el.tagName) : 'nada'));
+  }
+  return fuera;
+});
+ok(row1.length === 0, 'a1/b1/e1/h1 reciben el clic a 380x700' + (row1.length ? ' -> ' + row1.join(', ') : ''));
+
+console.log('\n== 34. Los atajos siguen vivos con un boton enfocado ==');
+await page.setViewportSize({ width: 1280, height: 800 });
+await page.waitForTimeout(300);
+const kbLive = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'sin';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.setFlip(false);
+  B.newGame();
+  const pulsa = (k, target) => target.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+  const flip = document.getElementById('flip');
+  flip.focus();
+  const antes = B.anchorOfIdx(56).y;
+  pulsa('f', flip);
+  const giro = Math.abs(B.anchorOfIdx(56).y - antes) > 5;
+  B.setFlip(false);
+  B.startMove(B.Engine.legalMoves(B.G.state)[0]);
+  await new Promise(r => setTimeout(r, 80));
+  const conJugada = B.G.log.length;
+  const sonido = document.getElementById('sound');
+  sonido.focus();
+  pulsa('u', sonido);
+  const deshizo = B.G.log.length < conJugada;
+  /* Un desplegable si conserva el teclado: la busqueda por tecleo lo necesita. */
+  const sel = document.getElementById('mode');
+  sel.focus();
+  const antes2 = B.anchorOfIdx(56).y;
+  pulsa('f', sel);
+  const selRespetado = Math.abs(B.anchorOfIdx(56).y - antes2) < 1;
+  return { giro, deshizo, selRespetado, focoBoton: document.activeElement === sel };
+});
+ok(kbLive.giro && kbLive.deshizo, 'F y U funcionan con un boton enfocado');
+ok(kbLive.selRespetado, 'un desplegable enfocado conserva el teclado');
+
+console.log('\n== 35. Espacio no bloquea el desplazamiento fuera del combate ==');
+const spaceScroll = await page.evaluate(() => {
+  const B = window.__BC;
+  const ev = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  document.body.dispatchEvent(ev);
+  return { busy: B.busy, prevenido: ev.defaultPrevented };
+});
+ok(!spaceScroll.busy && !spaceScroll.prevenido, 'sin combate en curso, Espacio se deja pasar a la pagina');
+
+console.log('\n== 36. El boton de sonido anuncia su estado ==');
+const sndTitle = await page.evaluate(() => {
+  const b = document.getElementById('sound');
+  const t0 = b.title, p0 = b.getAttribute('aria-pressed');
+  b.click();
+  const t1 = b.title, p1 = b.getAttribute('aria-pressed');
+  b.click();
+  return { t0, p0, t1, p1, t2: b.title, p2: b.getAttribute('aria-pressed') };
+});
+ok(sndTitle.t0 !== sndTitle.t1 && sndTitle.p1 === 'true' && sndTitle.p2 === 'false' && sndTitle.t2 === sndTitle.t0,
+  'el title y aria-pressed cambian al silenciar ("' + sndTitle.t0 + '" -> "' + sndTitle.t1 + '")');
+
+console.log('\n== 37. La cronica nunca se queda sin altura ==');
+const chron = [];
+for (const [w, h] of [[1280, 560], [1024, 520], [1280, 800], [1400, 460]]) {
+  await page.setViewportSize({ width: w, height: h });
+  await page.waitForTimeout(250);
+  const r = await page.evaluate(() => {
+    const ol = document.getElementById('moves');
+    const panel = document.querySelector('.panel');
+    return {
+      alto: Math.round(ol.clientHeight),
+      alcanzable: panel.scrollHeight <= panel.clientHeight + 1 || getComputedStyle(panel).overflowY === 'auto'
+    };
+  });
+  if (r.alto < 40 || !r.alcanzable) chron.push(w + 'x' + h + ' -> ' + r.alto + 'px');
+}
+ok(chron.length === 0, 'la cronica conserva altura util en ventanas bajas' + (chron.length ? ' -> ' + chron.join(', ') : ''));
+await page.setViewportSize({ width: 1280, height: 800 });
 
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');
