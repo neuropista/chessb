@@ -225,6 +225,158 @@ const mob = await page.evaluate(() => {
 ok(!mob.scrollX && mob.w > 300, 'sin desbordamiento horizontal a 420px (' + mob.w + 'x' + mob.h + ')');
 await page.screenshot({ path: SHOTS + '/04-movil.png', fullPage: false });
 
+console.log('\n== 11. Interaccion real con el raton ==');
+await page.setViewportSize({ width: 1280, height: 800 });
+await page.waitForTimeout(300);
+const clickSq = async (i) => {
+  const pt = await page.evaluate((i) => {
+    const B = window.__BC; const a = B.anchorOfIdx(i);
+    const r = document.getElementById('board').getBoundingClientRect();
+    return { x: r.left + a.x, y: r.top + a.y };
+  }, i);
+  await page.mouse.click(pt.x, pt.y);
+};
+await page.evaluate(() => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.newGame();
+});
+await clickSq(52);                       // e2
+const sel = await page.evaluate(() => ({ sel: window.__BC.G.sel, n: window.__BC.G.targets.length }));
+ok(sel.sel === 52 && sel.n === 2, 'al pulsar e2 se selecciona y se ofrecen 2 destinos');
+await clickSq(36);                       // e4
+await page.waitForFunction(() => !window.__BC.busy, null, { timeout: 12000 });
+const played = await page.evaluate(() => ({ log: window.__BC.G.log[0], turn: window.__BC.G.state.turn }));
+ok(played.log === 'e4' && played.turn === 'b', 'la jugada se ejecuta con el raton: ' + played.log);
+await clickSq(12);                       // e7 negras
+await clickSq(28);                       // e5
+await page.waitForFunction(() => !window.__BC.busy, null, { timeout: 12000 });
+ok(await page.evaluate(() => window.__BC.G.log[1]) === 'e5', 'las negras responden en el mismo tablero');
+
+console.log('\n== 12. Dialogo de coronacion por interfaz ==');
+await page.evaluate(() => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/3P4/8/8/8/8/8/4K3 w - - 0 1'));
+});
+await clickSq(11);                       // d7
+await clickSq(3);                        // d8
+const promoOpen = await page.evaluate(() => document.getElementById('promo').className.includes('show'));
+ok(promoOpen, 'se abre el dialogo con las cuatro opciones de coronacion');
+const nOpts = await page.$$eval('#promoRow .promoBtn', els => els.length);
+ok(nOpts === 4, 'ofrece 4 piezas (' + nOpts + ')');
+await page.click('#promoRow .promoBtn:nth-child(2)');   // torre
+await page.waitForFunction(() => !window.__BC.busy, null, { timeout: 12000 });
+const promoRes = await page.evaluate(() => ({ log: window.__BC.G.log[0], t: window.__BC.G.state.b[3] && window.__BC.G.state.b[3].t }));
+ok(promoRes.t === 'r' && /=R/.test(promoRes.log), 'corona en la pieza elegida: ' + promoRes.log);
+
+console.log('\n== 13. Cambiar ajustes en mitad de un combate ==');
+const mid = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'epico';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+  for (let i = 0; i < 30; i++) await new Promise(r => requestAnimationFrame(r));
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('level').value = '3';
+  document.getElementById('level').dispatchEvent(new Event('change'));
+  document.getElementById('flip').click();
+  window.dispatchEvent(new Event('resize'));
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 10000) await new Promise(r => requestAnimationFrame(r));
+  document.getElementById('flip').click();
+  return { busy: B.busy, log: B.G.log[0], pieces: B.G.state.b.filter(Boolean).length };
+});
+ok(!mid.busy && mid.log === 'Qxd5' && mid.pieces === 3, 'el combate termina bien pese a los cambios: ' + mid.log);
+
+console.log('\n== 14. Sin peticiones de red ==');
+const net = [];
+const page2 = await browser.newPage({ viewport: { width: 1024, height: 720 } });
+page2.on('request', r => { if (!r.url().startsWith('file://') && !r.url().startsWith('data:') && !r.url().startsWith('blob:')) net.push(r.url()); });
+await page2.goto(URL);
+await page2.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+await page2.waitForTimeout(1200);
+ok(net.length === 0, 'ninguna peticion externa' + (net.length ? ' -> ' + net.slice(0, 3).join(', ') : ''));
+
+console.log('\n== 15. prefers-reduced-motion ==');
+const page3 = await browser.newPage({ viewport: { width: 1024, height: 720 } });
+const err3 = [];
+page3.on('pageerror', e => err3.push(e.message));
+await page3.emulateMedia({ reducedMotion: 'reduce' });
+await page3.goto(URL);
+await page3.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const rm = await page3.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.cap));
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 10000) await new Promise(r => requestAnimationFrame(r));
+  return { reduced: B.G.reduced, speed: B.G.speedKey, log: B.G.log[0], shake: B.FX.shake.x };
+});
+ok(rm.reduced && rm.log === 'exd5' && err3.length === 0, 'con movimiento reducido el combate se juega sin sacudidas ni destellos');
+await page2.close(); await page3.close();
+
+console.log('\n== 16. Atajos de teclado ==');
+await page.evaluate(() => { window.__BC.newGame(); });
+await page.keyboard.press('n');
+await page.keyboard.press('f');
+await page.keyboard.press('m');
+await page.keyboard.press('u');
+const kb = await page.evaluate(() => ({ muted: window.__BC.SFX.isMuted(), err: false }));
+ok(kb.muted === true, 'la tecla M silencia el juego');
+await page.keyboard.press('m');
+
+console.log('\n== 17. La IA responde dentro de presupuesto ==');
+const think = await page.evaluate(() => {
+  const B = window.__BC;
+  let st = B.Engine.newGame(), worst = 0, total = 0, n = 0;
+  const hist = [B.Engine.key(st)];
+  for (let i = 0; i < 16 && !B.Engine.status(st, hist).over; i++) {
+    const t0 = performance.now();
+    const mv = B.AI.pick(st, 3, hist);
+    const dt = performance.now() - t0;
+    if (!mv) break;
+    worst = Math.max(worst, dt); total += dt; n++;
+    st = B.Engine.makeMove(st, mv);
+    hist.push(B.Engine.key(st));
+  }
+  return { worst: Math.round(worst), avg: Math.round(total / Math.max(1, n)), n };
+});
+ok(think.worst < 1200 && think.n >= 10, 'nivel 3: ' + think.n + ' jugadas, media ' + think.avg + 'ms, peor ' + think.worst + 'ms');
+
+console.log('\n== 18. Partida completa contra la IA con animaciones ==');
+const vsAi = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('mode').value = 'aa';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  document.getElementById('level').value = '2';
+  document.getElementById('level').dispatchEvent(new Event('change'));
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  B.G.aiDelay = 0.02;
+  B.newGame();
+  const t0 = performance.now();
+  let caps = 0, seen = 0;
+  while (!B.G.over && B.G.log.length < 40 && performance.now() - t0 < 70000) {
+    await new Promise(r => requestAnimationFrame(r));
+    if (B.anim && B.anim.move && B.anim.move.cap && B.anim.rt < 0.05) caps++;
+    seen = B.G.log.length;
+  }
+  return { plies: seen, caps, capturadas: B.G.captured.w.length + B.G.captured.b.length, over: !!B.G.over };
+});
+ok(vsAi.plies >= 20 && vsAi.capturadas >= 1, 'IA vs IA con animaciones completas: ' + vsAi.plies + ' jugadas, ' + vsAi.capturadas + ' piezas cobradas en combate');
+await page.screenshot({ path: SHOTS + '/05-partida.png' });
+
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');
 

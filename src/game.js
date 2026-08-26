@@ -704,7 +704,9 @@ function newGame() {
   G.stack = []; G.log = [];
   G.captured = { w: [], b: [] };
   G.sel = -1; G.targets = []; G.last = null; G.busy = false; G.over = null;
-  G.promo = null; G.banner = null; G.thinking = false; G.aiTimer = 0;
+  G.promo = null; G.thinking = false; G.aiTimer = 0;
+  hideBanner();
+  closePromo();
   FX.reset();
   syncUI();
   if (isAI(G.state.turn)) { G.thinking = true; G.aiTimer = Math.max(G.aiDelay, 0.4); }
@@ -719,8 +721,9 @@ function undo() {
     G.state = s.state; G.log = s.log; G.hist = s.hist;
     G.captured.w = s.capW; G.captured.b = s.capB; G.last = s.last;
   }
-  G.over = null; G.sel = -1; G.targets = []; G.promo = null; G.banner = null;
-  G.thinking = false; G.aiTimer = 0;
+  G.over = null; G.sel = -1; G.targets = []; G.thinking = false; G.aiTimer = 0;
+  hideBanner();
+  closePromo();
   FX.reset();
   syncUI();
 }
@@ -1064,7 +1067,7 @@ function showBanner(text, sub, tone) {
   UI.bannerS.textContent = sub || '';
   G.banner = { t: 0, life: tone === 'over' ? 6 : 1.8 };
 }
-function hideBanner() { UI.banner.className = 'banner'; }
+function hideBanner() { if (UI.banner) UI.banner.className = 'banner'; G.banner = null; }
 
 function openPromo(cands) {
   G.promo = { moves: cands };
@@ -1084,7 +1087,7 @@ function openPromo(cands) {
     UI.promoRow.appendChild(btn);
   }
 }
-function closePromo() { G.promo = null; UI.promo.className = 'promo'; }
+function closePromo() { G.promo = null; if (UI.promo) UI.promo.className = 'promo'; }
 
 /* ================================ ENTRADA ============================== */
 let soundArmed = false;

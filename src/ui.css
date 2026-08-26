@@ -88,7 +88,9 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); out
   text-shadow: 0 0 0 #000, 3px 3px 0 #000, -3px 3px 0 #000, 3px -3px 0 #000, -3px -3px 0 #000, 0 0 26px rgba(232,182,76,.55);
   animation: pop .32s cubic-bezier(.2,1.6,.4,1) both; }
 #bannerS { font-size: clamp(11px, 1.6vw, 15px); color: var(--ink); text-shadow: 2px 2px 0 #000; }
-.banner.check #bannerT { color: var(--danger); text-shadow: 3px 3px 0 #000, -3px 3px 0 #000, 3px -3px 0 #000, -3px -3px 0 #000, 0 0 26px rgba(214,73,60,.6); }
+.banner.check { justify-content: flex-start; padding-top: 18px; }
+.banner.check #bannerT { font-size: clamp(20px, 3.4vw, 34px); color: var(--danger); text-shadow: 3px 3px 0 #000, -3px 3px 0 #000, 3px -3px 0 #000, -3px -3px 0 #000, 0 0 26px rgba(214,73,60,.6); }
+.banner.check #bannerS { font-size: clamp(10px, 1.3vw, 13px); }
 @keyframes pop { from { transform: scale(.4) rotate(-6deg); opacity: 0; } to { transform: none; opacity: 1; } }
 
 .promo { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.72); }
