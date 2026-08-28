@@ -207,6 +207,11 @@ const SFX = (function () {
       master = ctx.createGain();
       master.gain.setValueAtTime(muted ? EPS : volume, ctx.currentTime);
       master.connect(ctx.destination);
+      if (typeof ctx.addEventListener === 'function') {
+        ctx.addEventListener('statechange', function () {
+          if (!muted && ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
+        });
+      }
     } catch (e) {
       ctx = null;
       master = null;
@@ -214,8 +219,20 @@ const SFX = (function () {
     return ctx;
   }
 
+  /* El navegador puede suspender el AudioContext en cualquier momento (pestana
+     en segundo plano, politica de reproduccion, cambio de dispositivo de audio).
+     Si no se reanuda, el juego se queda mudo para siempre. */
+  function despierta() {
+    if (!ctx) return false;
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+      try { if (ctx.resume) ctx.resume(); } catch (e) {}
+    }
+    return ctx.state !== 'closed';
+  }
+
   function play(name, opts) {
     if (!ctx || !master || muted) return;
+    if (!despierta()) return;
     var voice = VOICES[name];
     if (!voice) return;
     try {
@@ -229,6 +246,7 @@ const SFX = (function () {
 
   function setMuted(m) {
     muted = !!m;
+    if (!muted) { init(); despierta(); }        // reactivar debe devolver el sonido de verdad
     if (master) {
       try { master.gain.setValueAtTime(muted ? EPS : (volume > EPS ? volume : EPS), now()); } catch (e) {}
     }
@@ -246,7 +264,10 @@ const SFX = (function () {
     }
   }
 
+  function estado() { return ctx ? ctx.state : 'sin-contexto'; }
+
   return {
+    estado: estado,
     init: init,
     play: play,
     setMuted: setMuted,

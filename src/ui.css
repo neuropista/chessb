@@ -45,6 +45,10 @@ main { flex: 1 1 auto; display: flex; min-height: 0; gap: var(--gap); padding: v
 .logo span { color: var(--gold); }
 .controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 label { display: inline-flex; align-items: center; gap: 4px; color: var(--inkDim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+/* `display` de la regla de arriba gana al `display:none` que el navegador le da
+   a [hidden]: sin este !important el selector de Camara seguia a la vista en
+   2.5D y cambiarlo no movia nada. */
+[hidden] { display: none !important; }
 
 button, select {
   font: inherit; font-size: 12px; color: var(--ink); cursor: pointer;

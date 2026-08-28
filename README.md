@@ -99,7 +99,7 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
   `NaN`, sin `shadowBlur`, todas las partículas mueren.
 - **Audio**: los 16 sonidos con un doble de `AudioContext`.
 
-**Navegador** (`node tools/e2e.mjs`) — 41 secciones en Chromium sin cabeza, entre ellas:
+**Navegador** (`node tools/e2e.mjs`) — 43 secciones (84 comprobaciones) en Chromium sin cabeza, entre ellas:
 
 | Qué comprueba | Cómo |
 |---|---|
@@ -114,6 +114,8 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
 | Accesibilidad | `prefers-reduced-motion` sin fogonazos ni parpadeos; el teclado no secuestra los controles |
 | Adaptable | siete tamaños de ventana sin recorte ni desbordamiento; el lienzo sigue al contenedor aunque el panel crezca |
 | Vista 3D | 384 comprobaciones de hit-test (3 cámaras × 2 orientaciones), los seis poderes en 3D y el conmutador entre vistas |
+| Cámaras 3D | el selector solo existe en 3D y las tres cámaras llegan a su ángulo con el bucle del juego anulado |
+| Audio resistente | un `AudioContext` suspendido a mano revive con el siguiente sonido y con el botón *Sonido* |
 
 El juego pasó además una revisión adversarial en seis dimensiones (reglas, animación, render,
 fidelidad al encargo, robustez e interfaz), cuyos hallazgos se corrigieron con una prueba de

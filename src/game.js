@@ -1581,7 +1581,10 @@ function closePromo() { G.promo = null; if (UI.promo) UI.promo.className = 'prom
 
 /* ================================ ENTRADA ============================== */
 let soundArmed = false;
-function armSound() { if (!soundArmed) { soundArmed = true; try { SFX.init(); } catch (e) { } } }
+/* init() es idempotente y ademas reanuda un contexto suspendido, asi que se
+   llama en CADA gesto: si el navegador silencio el audio por su cuenta, el
+   siguiente clic o tecla lo devuelve. */
+function armSound() { soundArmed = true; try { SFX.init(); } catch (e) { } }
 
 function canvasPoint(ev) {
   const r = cv.getBoundingClientRect();
@@ -1832,6 +1835,7 @@ function init() {
     armSound();
     const m = !SFX.isMuted();
     SFX.setMuted(m);
+    if (!m) { try { SFX.init(); SFX.play('tick'); } catch (e) { } }
     UI.sound.textContent = m ? '🔇 Silencio' : '🔊 Sonido';
     UI.sound.title = m ? 'Activar el sonido (M)' : 'Silenciar (M)';
     UI.sound.setAttribute('aria-pressed', String(m));

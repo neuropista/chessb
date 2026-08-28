@@ -1021,7 +1021,104 @@ if (tiene3d) {
   ok(swap.bloqueado, 'no se puede cambiar de vista en mitad de un combate');
   ok(swap.log3d === 'exd5', 'el combate empezado en 3D termina bien (' + swap.log3d + ')');
   ok(swap.ok2d && swap.ok3d && swap.final === '2d', 'se juega igual en las dos vistas y se vuelve a 2.5D');
+
+  console.log('\n== 42. El angulo de camara cambia de verdad (y no depende del bucle del juego) ==');
+  /* Primero: en 2.5D el selector de Camara no debe verse siquiera. El atributo
+     [hidden] lo perdia contra `label { display:inline-flex }`, asi que el
+     usuario lo veia en 2.5D, lo cambiaba y no se movia nada. */
+  const camVis = await page.evaluate(() => {
+    const B = window.__BC, w = document.getElementById('camWrap');
+    const mide = () => ({ display: getComputedStyle(w).display, cajas: w.getClientRects().length });
+    B.setView('2d'); const en2d = mide();
+    B.setView('3d'); const en3d = mide();
+    B.setView('2d');
+    return { en2d, en3d };
+  });
+  ok(camVis.en2d.display === 'none' && camVis.en2d.cajas === 0 && camVis.en3d.cajas === 1,
+    'el selector de Camara solo existe en 3D (2.5D: ' + camVis.en2d.display + ', 3D: ' + camVis.en3d.display + ')');
+  /* Defecto reportado: "no cambia la camara, se queda estatica". La transicion
+     vivia en game.js y un fallo silencioso la congelaba; ahora la conduce el
+     propio motor, asi que la prueba ANULA R3.update para demostrarlo. */
+  await page.evaluate(() => {
+    const B = window.__BC;
+    B.setView('3d');
+    B.setCam('clasica');
+    B.R3.update = function () { };          // el juego deja de empujar la camara
+  });
+  await page.waitForTimeout(600);
+  const viaje = [];
+  for (const [id, grados] of [['cenital', 87], ['isometrica', 43], ['clasica', 23]]) {
+    const antes = await page.evaluate(() => Math.round(window.__BC.anchorOfIdx(0).y));
+    await page.selectOption('#cam', id);
+    const enMovimiento = await page.evaluate(() => window.__BC.R3.camMoving());
+    await page.waitForFunction(() => !window.__BC.R3.camMoving(), null, { timeout: 8000 })
+      .catch(() => { });
+    const fin = await page.evaluate(() => ({
+      y: Math.round(window.__BC.anchorOfIdx(0).y),
+      el: window.__BC.R3.camState().el,
+      nombre: window.__BC.R3.camState().nombre,
+      moviendo: window.__BC.R3.camMoving()
+    }));
+    viaje.push({ id, grados, antes, y: fin.y, el: fin.el, nombre: fin.nombre, moviendo: fin.moviendo, arranca: enMovimiento });
+  }
+  const llega = viaje.every(v =>
+    v.nombre === v.id && !v.moviendo && Math.abs(v.el - v.grados) < 0.01 && Math.abs(v.y - v.antes) > 20);
+  ok(llega, 'las tres camaras llegan a su angulo sin ayuda del bucle: ' +
+    viaje.map(v => v.id + ' ' + v.antes + '->' + v.y + 'px (' + Math.round(v.el) + ' grados)').join(', '));
+  ok(viaje.every(v => v.arranca), 'el cambio arranca un viaje de camara, no un salto instantaneo');
+  await page.evaluate(() => { window.__BC.setView('2d'); });
 }
+
+console.log('\n== 43. El audio se recupera solo de un contexto suspendido ==');
+/* Defecto reportado: "luego de varios sonidos, el sonido se apaga y no se
+   soluciona con el boton sonido". El navegador puede suspender el
+   AudioContext por su cuenta; antes nadie lo reanudaba. Esta pagina anula el
+   vigilante 'statechange' para comprobar las OTRAS dos vias de rescate. */
+const snd = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+await snd.addInitScript(() => {
+  const Real = window.AudioContext || window.webkitAudioContext;
+  if (!Real) return;
+  const Wrapped = function () {
+    const c = new Real();
+    c.addEventListener = function () { };   // sin red de seguridad automatica
+    window.__ctx = c;
+    return c;
+  };
+  Wrapped.prototype = Real.prototype;
+  window.AudioContext = Wrapped;
+  window.webkitAudioContext = Wrapped;
+});
+await snd.goto(URL);
+await snd.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+await snd.selectOption('#mode', 'hh');            // gesto real: arranca el audio
+await snd.waitForTimeout(300);
+const arranque = await snd.evaluate(() => window.__BC.SFX.estado());
+ok(arranque === 'running', 'tras el primer gesto el audio esta vivo (' + arranque + ')');
+
+const rescate = await snd.evaluate(async () => {
+  const B = window.__BC;
+  const espera = ms => new Promise(r => setTimeout(r, ms));
+  /* 1) el navegador suspende el contexto por su cuenta */
+  await window.__ctx.suspend();
+  const dormido = B.SFX.estado();
+  /* 2) el siguiente sonido del juego debe despertarlo */
+  B.SFX.play('tick');
+  await espera(150);
+  const trasSonido = B.SFX.estado();
+  /* 3) y el boton Sonido tambien, aunque se haya vuelto a dormir */
+  await window.__ctx.suspend();
+  const dormidoOtraVez = B.SFX.estado();
+  const b = document.getElementById('sound');
+  b.click();                                       // silenciar
+  b.click();                                       // volver a activar
+  await espera(150);
+  return { dormido, trasSonido, dormidoOtraVez, trasBoton: B.SFX.estado(), mudo: B.SFX.isMuted() };
+});
+ok(rescate.dormido === 'suspended' && rescate.trasSonido === 'running',
+  'un sonido reanima el contexto suspendido (' + rescate.dormido + ' -> ' + rescate.trasSonido + ')');
+ok(rescate.dormidoOtraVez === 'suspended' && rescate.trasBoton === 'running' && !rescate.mudo,
+  'el boton Sonido reanima el contexto suspendido (' + rescate.dormidoOtraVez + ' -> ' + rescate.trasBoton + ')');
+await snd.close();
 
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');

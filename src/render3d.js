@@ -25,6 +25,7 @@ const R3 = (function () {
   let meshes = Object.create(null);     // t+c -> {buf, count}
   let boardMesh = null, quadBuf = null;
   let W = 1, H = 1, DPR = 1;
+  const CAM_KEYS = ['el', 'az', 'zoom', 'fov', 'ty'];
   let camName = 'clasica';
   let cam = { el: 23, az: 0, zoom: 1.0, fov: 32, ty: 0.30 };
   let camTarget = Object.assign({}, cam);
@@ -396,7 +397,28 @@ const R3 = (function () {
     return { eye: eyeAt(fitVal * (cam.zoom || 1), el, az, cam.ty), tgt: tgt };
   }
 
+  /* La transicion de camara se mueve sola dentro del renderizador: si dependiera
+     de que alguien llame a update(dt) desde fuera, un fallo en esa llamada
+     dejaria la camara congelada sin que nada mas se notase. */
+  let lastTick = 0;
+  function tickCam() {
+    const ahora = (typeof performance !== 'undefined' && performance.now
+      ? performance.now() : Date.now()) / 1000;
+    const dt = lastTick ? Math.min(0.05, Math.max(0, ahora - lastTick)) : 1 / 60;
+    lastTick = ahora;
+    const k = Math.min(1, dt * 6);
+    for (let i = 0; i < CAM_KEYS.length; i++) {
+      const key = CAM_KEYS[i];
+      const objetivo = camTarget[key];
+      if (typeof objetivo !== 'number') continue;
+      const d = objetivo - cam[key];
+      if (Math.abs(d) > 0.0005) cam[key] += d * k;
+      else cam[key] = objetivo;
+    }
+  }
+
   function updateMatrices() {
+    tickCam();
     const st = camState();
     eye = st.eye;
     const upv = cam.el > 80 ? [0, 0, -1] : [0, 1, 0];
@@ -466,22 +488,24 @@ const R3 = (function () {
     if (!CAMS[name]) return;
     camName = name;
     camTarget = CAMS[name];
+    lastTick = 0;
     if (instant) { cam = Object.assign({}, camTarget); updateMatrices(); }
   }
   function getCamera() { return camName; }
   function setFlip(v) { flipped = !!v; }
 
-  function update(dt) {
+  function update() {
     if (!ok) return;
-    const k = Math.min(1, dt * 6);
-    let moved = false;
-    for (const key of ['el', 'az', 'zoom', 'fov', 'ty']) {
-      const d = camTarget[key] - cam[key];
-      if (Math.abs(d) > 0.0005) { cam[key] += d * k; moved = true; }
-      else cam[key] = camTarget[key];
-    }
-    void moved;
     updateMatrices();
+  }
+
+  /* true mientras la camara sigue viajando hacia su destino. */
+  function camMoving() {
+    for (let i = 0; i < CAM_KEYS.length; i++) {
+      const key = CAM_KEYS[i];
+      if (Math.abs(camTarget[key] - cam[key]) > 0.0005) return true;
+    }
+    return false;
   }
 
   /* proyeccion de una casilla al plano de la pantalla, para las particulas */
@@ -675,6 +699,7 @@ const R3 = (function () {
     setCamera: setCamera, getCamera: getCamera, cameraList: cameraList,
     setFlip: setFlip, project: project, pick: pick, ready: ready,
     voxelSize: voxelSize, worldToScreen: worldToScreen, squareWorld: squareWorld,
-    lastError: lastError, stats: stats
+    lastError: lastError, stats: stats, camMoving: camMoving,
+    camState: function () { return { nombre: camName, el: cam.el, az: cam.az, ty: cam.ty, fov: cam.fov }; }
   };
 })();
