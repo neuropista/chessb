@@ -30,6 +30,19 @@
         <option value="3">Gran Maestre</option>
       </select>
     </label>
+    <label>Vista
+      <select id="view" aria-label="Vista del tablero">
+        <option value="2d">2.5D pixel-art</option>
+        <option value="3d">3D voxel</option>
+      </select>
+    </label>
+    <label id="camWrap" hidden>Camara
+      <select id="cam" aria-label="Angulo de camara">
+        <option value="clasica">Clasica</option>
+        <option value="isometrica">Isometrica</option>
+        <option value="cenital">Cenital</option>
+      </select>
+    </label>
     <label>Ritmo
       <select id="speed" aria-label="Ritmo de las animaciones">
         <option value="epico">Epico</option>
@@ -46,6 +59,7 @@
 </header>
 <main>
   <div id="stage">
+    <canvas id="board3d" aria-hidden="true"></canvas>
     <canvas id="board" aria-label="Tablero de ajedrez"></canvas>
     <div id="hint" class="hint">Clic o <b>Espacio</b> para acelerar el combate <button id="skip">Saltar</button></div>
     <div id="banner" class="banner"><div id="bannerT"></div><div id="bannerS"></div></div>
@@ -57,7 +71,7 @@
     <section><h2>Botin de las negras</h2><div id="capB" class="captured"></div></section>
     <div id="material" class="material"></div>
     <section class="movesWrap"><h2>Cronica de la batalla</h2><ol id="moves" class="movelist"></ol></section>
-    <p class="help">Haz clic en una pieza y luego en su destino.<br><b>Espacio</b> acelera el combate &middot; <b>U</b> deshacer &middot; <b>N</b> nueva &middot; <b>F</b> girar &middot; <b>M</b> silenciar</p>
+    <p class="help">Haz clic en una pieza y luego en su destino.<br><b>Espacio</b> acelera el combate &middot; <b>U</b> deshacer &middot; <b>N</b> nueva &middot; <b>F</b> girar &middot; <b>M</b> silenciar &middot; <b>V</b> 2.5D/3D &middot; <b>C</b> camara</p>
   </aside>
 </main>
 <noscript><p style="padding:20px">Este juego necesita JavaScript activado.</p></noscript>

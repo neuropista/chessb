@@ -20,6 +20,11 @@ body {
   -webkit-font-smoothing: none;
 }
 canvas { display: block; }
+/* Las dos vistas comparten el mismo hueco: el lienzo 2D queda encima y,
+   en modo 3D, solo lleva las particulas y los rotulos. */
+#board3d { position: absolute; inset: 0; z-index: 0; }
+#board { position: relative; z-index: 1; }
+body.v3d #board { background: transparent; }
 h1, h2, p, ol, li { margin: 0; }
 .dim { color: var(--inkDim); }
 
@@ -75,12 +80,12 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); out
 .help b { color: var(--gold); }
 
 /* ------------------------------------------------------ capas del tablero */
-.hint { position: absolute; left: 50%; transform: translateX(-50%); bottom: 8px; display: none;
+.hint { position: absolute; z-index: 3; left: 50%; transform: translateX(-50%); bottom: 8px; display: none;
   font-size: 11px; color: var(--ink); background: rgba(0,0,0,.66); border: 1px solid var(--panelEdge);
   padding: 4px 8px; border-radius: 2px; pointer-events: auto; }
 .hint button { padding: 2px 6px; font-size: 11px; margin-left: 6px; }
 
-.banner { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+.banner { position: absolute; z-index: 3; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; pointer-events: none; opacity: 0; transition: opacity .18s ease; text-align: center; padding: 20px; }
 .banner.show { opacity: 1; }
 .banner.over { background: radial-gradient(60% 50% at 50% 50%, rgba(0,0,0,.72), rgba(0,0,0,.30)); }
@@ -93,7 +98,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); out
 .banner.check #bannerS { font-size: clamp(10px, 1.3vw, 13px); }
 @keyframes pop { from { transform: scale(.4) rotate(-6deg); opacity: 0; } to { transform: none; opacity: 1; } }
 
-.promo { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.72); }
+.promo { position: absolute; z-index: 4; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.72); }
 .promo.show { display: flex; }
 .promoBox { background: linear-gradient(180deg, var(--panel), #1b1512); border: 2px solid var(--gold); border-radius: 4px; padding: 14px 18px; text-align: center; box-shadow: 0 10px 30px #000; }
 .promoBox p { margin-bottom: 10px; color: var(--gold); letter-spacing: 1px; }

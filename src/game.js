@@ -81,17 +81,25 @@ function quadOf(sr, sc) {
 }
 /* ancla de la pieza: centro de la casilla, algo hacia el borde cercano */
 function anchorOf(sr, sc) {
+  if (view3d && R3.ready()) {
+    const p3 = R3.project(sr, sc);
+    /* El resto del codigo calcula el tamano como L.pix * s, asi que aqui se
+       devuelve la escala relativa: L.pix * s = pixeles de pantalla por voxel. */
+    return { x: p3.x, y: p3.y, s: p3.s / Math.max(0.0001, L.pix) };
+  }
   return proj(-1 + (sc + 0.5) / 4, (sr + 0.62) / 8);
 }
 
 /* --------------------------------------------------- indices <-> pantalla */
 let flip = false;
+/* En 3D no se reflejan los indices: gira la camara, que es lo natural. */
+let view3d = false;
 function idxToRC(i) {
   const r = i >> 3, c = i & 7;
-  return flip ? { sr: 7 - r, sc: 7 - c } : { sr: r, sc: c };
+  return (flip && !view3d) ? { sr: 7 - r, sc: 7 - c } : { sr: r, sc: c };
 }
 function rcToIdx(sr, sc) {
-  const r = flip ? 7 - sr : sr, c = flip ? 7 - sc : sc;
+  const r = (flip && !view3d) ? 7 - sr : sr, c = (flip && !view3d) ? 7 - sc : sc;
   return r * 8 + c;
 }
 function anchorOfIdx(i) { const p = idxToRC(i); return anchorOf(p.sr, p.sc); }
@@ -105,6 +113,10 @@ function pointInQuad(px, py, q) {
   return inside;
 }
 function pickSquare(px, py) {
+  if (view3d && R3.ready()) {
+    const q = R3.pick(px, py);
+    return q ? rcToIdx(q.sr, q.sc) : -1;
+  }
   for (let sr = 7; sr >= 0; sr--) {        // de cerca a lejos: gana la casilla mas cercana
     for (let sc = 0; sc < 8; sc++) {
       if (pointInQuad(px, py, quadOf(sr, sc))) return rcToIdx(sr, sc);
@@ -133,6 +145,13 @@ function drawSprite(ctx, t, c, sr, sc, o) {
   const lift = (o.lift || 0) * k;
   ctx.save();
   ctx.globalAlpha = o.alpha == null ? 1 : clamp(o.alpha, 0, 1);
+  if (o.erode > 0) {
+    /* Desintegracion: solo queda la parte que aun no ha consumido la magia. */
+    const alto = spr.h * k * (1 - clamp(o.erode, 0, 1));
+    ctx.beginPath();
+    ctx.rect(a.x - spr.w * k, a.y - lift - spr.h * k, spr.w * k * 2, alto);
+    ctx.clip();
+  }
   ctx.translate(a.x, a.y - lift);
   if (o.lean) ctx.rotate(o.lean);
   const sx = (o.flipX ? -1 : 1) * k;
@@ -245,20 +264,22 @@ function mkActor(idx, t, c) {
   return {
     t: t, c: c, sr: p.sr, sc: p.sc, frame: 'idle',
     flipX: (c === 'b'), lift: 0, alpha: 1, scale: 1, squash: 1,
-    lean: 0, white: false, hidden: false
+    lean: 0, white: false, hidden: false, erode: 0
   };
 }
 function walkFrame(t) { return (Math.floor(t / 0.13) % 2) ? 'walk' : 'idle'; }
 
-function spritePixelsScreen(a) {
+function spritePixelsScreen(a, y0, y1) {
   const an = anchorOf(a.sr, a.sc);
   const k = L.pix * an.s;
   const spr = SPR[a.t];
   const px = PXCACHE[a.t + a.c + (a.frame || 'idle')] || [];
   const out = [];
-  const step = px.length > 260 ? 2 : 1;
+  const banda = y0 != null;
+  const step = (!banda && px.length > 260) ? 2 : 1;
   for (let i = 0; i < px.length; i += step) {
     const p = px[i];
+    if (banda && (p.y < y0 || p.y >= y1)) continue;
     const lx = (a.flipX ? (spr.w - 1 - p.x) : p.x) - spr.w / 2;
     out.push({ x: an.x + lx * k, y: an.y - (spr.h - p.y) * k, color: p.color, size: Math.max(2, k) });
   }
@@ -272,171 +293,314 @@ function say(text, x, y, color, dur) {
 function shake(p) { if (!G.reduced) FX.shakeImpulse(p); }
 function sfx(n) { SFX.play(n); }
 
+/* ============ PODERES: cada pieza tiene el suyo, con su nombre ============ */
+const POWER = {
+  p: { name: '¡CARGA DE LANZA!', color: '#e6eef8' },
+  n: { name: '¡CARGA DE CABALLERIA!', color: '#ffd257' },
+  b: { name: '¡RAYO ARCANO!', color: '#7ef0ff' },
+  r: { name: '¡TERREMOTO!', color: '#c9b89a' },
+  q: { name: '¡TORMENTA ARCANA!', color: '#ff9ae8' },
+  k: { name: '¡DUELO REAL!', color: '#ffd257' }
+};
+/* Los efectos de la pelea duran el doble que el resto de la animacion. */
+const BATTLE_STRETCH = 2;
+
 /* --------- coreografia del combate: un guion distinto por atacante ------ */
 function battleActs(A, D, ctxb) {
   const ux = ctxb.ux, uy = ctxb.uy, stand = ctxb.stand;
   const toward = function (d) { A.sr = stand.sr - uy * d; A.sc = stand.sc - ux * d; };
   const chest = function () { return bodyPoint(D.sr, D.sc, 0.55, 0); };
+  const feet = function () { return bodyPoint(D.sr, D.sc, 0.06, 0); };
   const acts = [];
   const once = function (a, k, fn) { if (!a._o) a._o = {}; if (!a._o[k]) { a._o[k] = 1; fn(); } };
+  const glow = THEME.sprite[A.c].X || THEME.fx.magicW;
+  const gold = THEME.sprite[A.c].G;
+  const dirAng = Math.atan2(-uy, -ux);
+  /* Punto del arma del atacante, para que la energia salga de donde debe. */
+  const weapon = function (fy) {
+    return bodyPoint(A.sr, A.sc, fy == null ? 1.02 : fy, (A.flipX ? -9 : 9));
+  };
+  /* Cada acto se estira: la pelea dura el doble. */
+  const push = function (a) { a.d = (a.d || 0) * BATTLE_STRETCH; acts.push(a); return a; };
+  const pause = function (d) { return push({ d: d, tick: function () { } }); };
 
-  function thrust(power, word) {
+  /* ---- telegrafia comun: el atacante se carga de su propio poder ---- */
+  const windup = {
+    d: 0.42,
+    enter: function () {
+      A.frame = 'attack';
+      sfx('select');
+      const c = bodyPoint(A.sr, A.sc, 0.5, 0);
+      FX.emit('impact', c.x, c.y, { scale: c.k * 5, color: POWER[A.t].color });
+    },
+    tick: function (u) {
+      A.lift = 1.2 * Math.sin(Math.PI * u);
+      if (Math.random() < 0.5) {
+        const w = weapon(0.55 + Math.random() * 0.5);
+        FX.emit('magic', w.x, w.y, { n: 1, color: POWER[A.t].color, scale: w.k });
+      }
+    },
+    exit: function () { A.lift = 0; }
+  };
+  push(windup);
+
+  function thrust(power, word, dur) {
     const a = {
-      d: 0.30,
-      enter: function () { A.frame = 'attack'; },
+      d: dur || 0.30,
+      enter: function () { A.frame = 'attack'; sfx('slash'); },
       tick: function (u) {
         toward(0.42 * Math.sin(Math.PI * u) * power);
         if (u > 0.42 && u < 0.75) {
           once(a, 'hit', function () {
             const c = chest();
-            FX.emit('slash', c.x, c.y, { dir: Math.atan2(-uy, -ux), scale: c.k * 6, color: THEME.fx.spark });
-            FX.emit('sparks', c.x, c.y, { n: 14, color: THEME.fx.spark, color2: THEME.fx.spark2 });
-            FX.emit('impact', c.x, c.y, { scale: c.k * 5 });
+            FX.emit('slash', c.x, c.y, { dir: dirAng, scale: c.k * 6 * power, color: THEME.fx.spark });
+            FX.emit('sparks', c.x, c.y, { n: 16, color: THEME.fx.spark, color2: THEME.fx.spark2 });
+            FX.emit('impact', c.x, c.y, { scale: c.k * 5 * power });
             shake(5 * power); sfx('clash');
-            D.lean = 0.10 * (ux > 0 ? 1 : -1);
-            if (word) say(word, c.x, c.y - c.k * 8, THEME.fx.spark);
+            D.lean = 0.10 * power * (ux > 0 ? 1 : -1);
+            if (word) say(word, c.x, c.y - c.k * 8, THEME.fx.spark, 0.9);
           });
         }
-        D.sc = ctxb.d0.sc + ux * 0.10 * Math.sin(Math.PI * clamp((u - 0.4) / 0.6, 0, 1));
+        D.sc = ctxb.d0.sc + ux * 0.10 * power * Math.sin(Math.PI * clamp((u - 0.4) / 0.6, 0, 1));
       },
       exit: function () { A.frame = 'idle'; toward(0); D.sc = ctxb.d0.sc; D.lean = 0; }
     };
     return a;
   }
 
-  if (A.t === 'p') {                                   /* lanza: dos estocadas */
-    acts.push(thrust(0.9, null), { d: 0.10, tick: function () { } }, thrust(1.25, '¡ZAS!'));
-  } else if (A.t === 'r') {                             /* golem: mazazo */
-    let a1;
-    a1 = {
-      d: 0.40, enter: function () { A.frame = 'attack'; sfx('slash'); },
-      tick: function (u) { A.lift = 7 * easeOut(u); A.squash = 1 + 0.05 * u; }
+  if (A.t === 'p') {
+    /* PEON — Carga de lanza: tres estocadas encadenadas, cada una mas dura. */
+    push(thrust(0.8, null, 0.26));
+    pause(0.08);
+    push(thrust(1.0, '¡ZAS!', 0.26));
+    pause(0.10);
+    const fin = push(thrust(1.5, '¡RAS!', 0.34));
+    const orig = fin.tick;
+    fin.tick = function (u, t) {
+      orig(u, t);
+      if (u > 0.5) once(fin, 'combo', function () {
+        const c = chest();
+        FX.emit('slash', c.x, c.y, { dir: dirAng + 0.6, scale: c.k * 7, color: THEME.fx.spark2 });
+        FX.emit('slash', c.x, c.y, { dir: dirAng - 0.6, scale: c.k * 7, color: THEME.fx.spark2 });
+        FX.emit('stars', c.x, c.y, { n: 6 });
+      });
     };
-    const a2 = {
+    push({ d: 0.20, tick: function () { } });
+
+  } else if (A.t === 'r') {
+    /* TORRE — Terremoto: alza los punos, la tierra tiembla y dos mazazos. */
+    const alza = {
       d: 0.45,
+      enter: function () { A.frame = 'attack'; sfx('stone'); },
       tick: function (u) {
-        A.lift = 7 * (1 - easeIn(u)); A.squash = 1 - 0.10 * easeIn(u);
-        toward(0.30 * easeIn(u));
-        if (u > 0.62) once(a2, 'boom', function () {
-          const c = bodyPoint(D.sr, D.sc, 0.12, 0);
-          FX.emit('impact', c.x, c.y, { scale: c.k * 11 });
-          FX.emit('stone', c.x, c.y, { n: 22, color: THEME.fx.stone });
-          FX.emit('dust', c.x, c.y, { n: 16 });
-          shake(14); sfx('stone');
-          say('¡CRASH!', c.x, c.y - c.k * 16, THEME.fx.stone);
-          D.squash = 0.70; D.lift = 0;
-        });
-      },
-      exit: function () { A.squash = 1; A.lift = 0; toward(0); }
-    };
-    acts.push(a1, a2, { d: 0.28, tick: function (u) { D.squash = lerp(0.70, 0.92, u); } });
-  } else if (A.t === 'n') {                             /* caballero: embestida */
-    const a = {
-      d: 0.55,
-      enter: function () { A.frame = 'attack'; sfx('slash'); },
-      tick: function (u) {
-        const p = easeInOut(u);
-        A.sr = lerp(stand.sr, D.sr - uy * 0.85, p);
-        A.sc = lerp(stand.sc, D.sc - ux * 0.85, p);
-        A.lift = Math.abs(Math.sin(u * Math.PI * 3)) * 4;
-        if (u > 0.45) once(a, 'hit', function () {
-          const c = chest();
-          FX.emit('slash', c.x, c.y, { dir: Math.atan2(-uy, -ux), scale: c.k * 7, color: THEME.fx.spark });
-          FX.emit('sparks', c.x, c.y, { n: 18, color: THEME.fx.spark, color2: THEME.fx.spark2 });
-          FX.emit('dust', c.x, c.y - c.k * 2, { n: 14 });
-          shake(11); sfx('clash');
-          say('¡PUM!', c.x, c.y - c.k * 10, THEME.fx.spark);
-          D.lean = 0.30 * (ux > 0 ? 1 : -1); D.squash = 0.9;
-        });
-      },
-      exit: function () { A.lift = 0; }
-    };
-    acts.push(a, { d: 0.22, tick: function () { } });
-    ctxb.chargedPast = true;
-  } else if (A.t === 'b') {                             /* hechicero: rayo magico */
-    const glow = THEME.sprite[A.c].X || THEME.fx.magicW;
-    const a1 = {
-      d: 0.48,
-      enter: function () { A.frame = 'attack'; sfx('magic'); },
-      tick: function (u) {
-        const tip = bodyPoint(A.sr, A.sc, 1.02, (A.flipX ? -9 : 9));
-        if (Math.random() < 0.55) FX.emit('magic', tip.x, tip.y, { n: 2, color: glow, scale: tip.k });
+        A.lift = 8 * easeOut(u);
+        A.squash = 1 + 0.06 * u;
+        if (Math.random() < 0.6) {          // la tierra se agrieta alrededor
+          const f = feet();
+          const ang = Math.random() * Math.PI * 2, r = f.k * (6 + Math.random() * 14);
+          FX.emit('dust', f.x + Math.cos(ang) * r, f.y + Math.sin(ang) * r * 0.4, { n: 2 });
+        }
+        if (u > 0.4) shake(2);
       }
     };
-    const a2 = {
-      d: 0.50,
+    push(alza);
+    for (let g = 0; g < 2; g++) {
+      const golpe = {
+        d: 0.42,
+        tick: function (u) {
+          A.lift = 8 * (1 - easeIn(u));
+          A.squash = 1 - 0.10 * easeIn(u);
+          toward(0.30 * easeIn(u));
+          if (u > 0.55) once(golpe, 'boom', function () {
+            const c = feet();
+            FX.emit('impact', c.x, c.y, { scale: c.k * (12 + g * 5) });
+            FX.emit('impact', c.x, c.y, { scale: c.k * (7 + g * 4), color: THEME.fx.stone });
+            FX.emit('stone', c.x, c.y, { n: 26, color: THEME.fx.stone });
+            FX.emit('dust', c.x, c.y, { n: 20 });
+            shake(13 + g * 4); sfx('stone');
+            say(g ? '¡CRASH!' : '¡PUM!', c.x, c.y - c.k * 18, THEME.fx.stone, 0.9);
+            D.squash = 0.72 - g * 0.06;
+            D.lift = 0;
+          });
+        },
+        exit: function () { A.squash = 1; A.lift = 0; toward(0); }
+      };
+      push(golpe);
+      if (!g) push({ d: 0.26, tick: function (u) { A.lift = 8 * easeOut(u); D.squash = lerp(0.72, 0.95, u); } });
+    }
+    push({ d: 0.30, tick: function (u) { D.squash = lerp(0.66, 0.90, u); } });
+
+  } else if (A.t === 'n') {
+    /* CABALLO — Carga de caballeria: retrocede, embiste y vuelve a pasar. */
+    push({
+      d: 0.34,
+      enter: function () { A.frame = 'attack'; sfx('move'); },
       tick: function (u) {
-        if (u > 0.06) once(a2, 'bolt', function () {
-          const tip = bodyPoint(A.sr, A.sc, 1.02, (A.flipX ? -9 : 9));
-          const c = chest();
-          FX.emit('bolt', tip.x, tip.y, { x2: c.x, y2: c.y, color: glow });
+        A.sr = stand.sr + uy * 0.45 * easeOut(u);
+        A.sc = stand.sc + ux * 0.45 * easeOut(u);
+        A.lift = Math.abs(Math.sin(u * Math.PI * 2)) * 2;
+      }
+    });
+    for (let p = 0; p < 2; p++) {
+      const carga = {
+        d: 0.52,
+        enter: function () { A.frame = 'attack'; sfx('slash'); },
+        tick: function (u) {
+          const q = easeInOut(u);
+          const desde = p === 0 ? 0.45 : -0.85;
+          const hasta = p === 0 ? -0.85 : 0.45;
+          A.sr = stand.sr + uy * lerp(desde, hasta, q);
+          A.sc = stand.sc + ux * lerp(desde, hasta, q);
+          A.lift = Math.abs(Math.sin(u * Math.PI * 3)) * 5;
+          if (Math.random() < 0.5) {
+            const b = bodyPoint(A.sr, A.sc, 0.02, 0);
+            FX.emit('dust', b.x, b.y, { n: 2 });
+          }
+          if (u > 0.42) once(carga, 'hit', function () {
+            const c = chest();
+            FX.emit('slash', c.x, c.y, { dir: dirAng + (p ? 0.5 : -0.5), scale: c.k * 8, color: THEME.fx.spark });
+            FX.emit('sparks', c.x, c.y, { n: 20, color: gold, color2: THEME.fx.spark2 });
+            FX.emit('dust', c.x, c.y, { n: 16 });
+            shake(11 + p * 3); sfx('clash');
+            say(p ? '¡PLAF!' : '¡PUM!', c.x, c.y - c.k * 10, gold, 0.9);
+            D.lean = (0.22 + p * 0.16) * (ux > 0 ? 1 : -1);
+            D.squash = 0.92 - p * 0.06;
+          });
+        },
+        exit: function () { A.lift = 0; }
+      };
+      push(carga);
+      if (!p) push({ d: 0.16, tick: function () { } });
+    }
+    ctxb.chargedPast = false;
+    push({ d: 0.20, tick: function () { } });
+
+  } else if (A.t === 'b') {
+    /* ALFIL — Rayo arcano: circulo de runas, canalizacion y rayo encadenado. */
+    const circulo = {
+      d: 0.55,
+      enter: function () { A.frame = 'attack'; sfx('magic'); },
+      tick: function (u) {
+        const w = weapon(1.02);
+        /* runas girando alrededor de la gema */
+        const n = 3;
+        for (let i = 0; i < n; i++) {
+          const ang = u * Math.PI * 4 + (i * Math.PI * 2) / n;
+          const r = w.k * 9 * (1 - u * 0.45);
+          FX.emit('magic', w.x + Math.cos(ang) * r, w.y + Math.sin(ang) * r * 0.6,
+            { n: 1, color: glow, scale: w.k });
+        }
+        if (u > 0.75) once(circulo, 'carga', function () {
+          FX.emit('impact', w.x, w.y, { scale: w.k * 6, color: glow });
+        });
+      }
+    };
+    push(circulo);
+    for (let z = 0; z < 2; z++) {
+      const rayo = {
+        d: 0.30,
+        tick: function (u) {
+          if (u > 0.05) once(rayo, 'bolt', function () {
+            const w = weapon(1.02), c = chest();
+            FX.emit('bolt', w.x, w.y, { x2: c.x, y2: c.y, color: glow });
+            sfx('magic');
+          });
+          if (u > 0.35) once(rayo, 'hit', function () {
+            const c = chest();
+            FX.emit('magic', c.x, c.y, { n: 18 + z * 8, color: glow, scale: c.k });
+            FX.emit('impact', c.x, c.y, { scale: c.k * (6 + z * 3), color: glow });
+            FX.emit('sparks', c.x, c.y, { n: 8, color: glow, color2: THEME.fx.flash });
+            shake(5 + z * 3);
+            if (z === 1) say('¡FZZZT!', c.x, c.y - c.k * 12, glow, 1.0);
+            D.white = true;
+          });
+        },
+        exit: function () { D.white = false; }
+      };
+      push(rayo);
+      push({ d: 0.10, tick: function () { } });
+    }
+
+  } else if (A.t === 'q') {
+    /* REINA — Tormenta arcana: se eleva, invoca proyectiles y estalla. */
+    const sube = {
+      d: 0.50,
+      enter: function () { A.frame = 'attack'; sfx('magic'); },
+      tick: function (u) {
+        A.lift = 10 * easeOut(u);
+        const w = weapon(0.95);
+        const ang = u * Math.PI * 6;
+        FX.emit('magic', w.x + Math.cos(ang) * w.k * 7, w.y + Math.sin(ang) * w.k * 4,
+          { n: 2, color: glow, scale: w.k });
+      }
+    };
+    push(sube);
+    const lluvia = {
+      d: 0.70,
+      tick: function (u) {
+        A.lift = 10;
+        const c = chest();
+        /* proyectiles que caen del cielo sobre el defensor */
+        if (Math.random() < 0.55) {
+          const dx = (Math.random() - 0.5) * c.k * 26;
+          FX.emit('bolt', c.x + dx, c.y - c.k * 40, { x2: c.x + dx * 0.3, y2: c.y, color: glow });
+          FX.emit('magic', c.x + dx * 0.3, c.y, { n: 5, color: glow, scale: c.k });
+          FX.emit('impact', c.x + dx * 0.3, c.y, { scale: c.k * 3, color: glow });
+          shake(3);
           sfx('magic');
-        });
-        if (u > 0.34) once(a2, 'hit', function () {
-          const c = chest();
-          FX.emit('magic', c.x, c.y, { n: 26, color: glow, scale: c.k });
-          FX.emit('impact', c.x, c.y, { scale: c.k * 7, color: glow });
-          shake(7);
-          say('¡FZZZT!', c.x, c.y - c.k * 10, glow);
-          D.white = true;
-        });
+        }
+        if (u > 0.2) D.white = (Math.floor(u * 14) % 2) === 0 && !G.reduced;
       },
       exit: function () { D.white = false; }
     };
-    acts.push(a1, a2);
-  } else if (A.t === 'q') {                             /* reina: descarga arcana */
-    const glow = THEME.sprite[A.c].X || THEME.fx.magicW;
-    const a1 = {
-      d: 0.45,
-      enter: function () { A.frame = 'attack'; sfx('magic'); },
+    push(lluvia);
+    const estallido = {
+      d: 0.46,
       tick: function (u) {
-        A.lift = 8 * easeOut(u);
-        const p = bodyPoint(A.sr, A.sc, 0.9, (A.flipX ? -7 : 7));
-        if (Math.random() < 0.7) FX.emit('magic', p.x, p.y, { n: 2, color: glow, scale: p.k });
-      }
-    };
-    const a2 = {
-      d: 0.55,
-      tick: function (u) {
-        A.lift = 8;
-        if (u > 0.12) once(a2, 'blast', function () {
-          const p = bodyPoint(A.sr, A.sc, 0.9, (A.flipX ? -7 : 7));
-          const c = chest();
-          FX.emit('bolt', p.x, p.y, { x2: c.x, y2: c.y, color: glow });
-          FX.emit('impact', c.x, c.y, { scale: c.k * 12, color: glow });
-          FX.emit('magic', c.x, c.y, { n: 34, color: glow, scale: c.k });
-          FX.emit('sparks', c.x, c.y, { n: 16, color: glow, color2: THEME.fx.flash });
-          shake(12); sfx('capture');
-          say('¡FLASH!', c.x, c.y - c.k * 12, glow);
+        A.lift = 10;
+        if (u > 0.15) once(estallido, 'blast', function () {
+          const w = weapon(0.95), c = chest();
+          FX.emit('bolt', w.x, w.y, { x2: c.x, y2: c.y, color: glow });
+          FX.emit('impact', c.x, c.y, { scale: c.k * 14, color: glow });
+          FX.emit('impact', c.x, c.y, { scale: c.k * 9, color: THEME.fx.flash });
+          FX.emit('magic', c.x, c.y, { n: 40, color: glow, scale: c.k });
+          FX.emit('sparks', c.x, c.y, { n: 20, color: glow, color2: THEME.fx.flash });
+          shake(13); sfx('capture');
+          say('¡FLASH!', c.x, c.y - c.k * 14, glow, 1.1);
           if (!G.reduced) anim.flash = 0.55;
           D.white = true;
         });
       },
       exit: function () { D.white = false; }
     };
-    acts.push(a1, a2, { d: 0.25, tick: function (u) { A.lift = 8 * (1 - u); } });
-  } else {                                              /* rey: duelo a espada */
-    for (let i = 0; i < 3; i++) {
-      const a = {
-        d: 0.26,
+    push(estallido);
+    push({ d: 0.28, tick: function (u) { A.lift = 10 * (1 - u); } });
+
+  } else {
+    /* REY — Duelo real: cinco mandobles, nube de pelea y tajo final. */
+    for (let i = 0; i < 5; i++) {
+      const choque = {
+        d: 0.24,
         enter: function () { A.frame = 'attack'; D.frame = 'attack'; },
         tick: function (u) {
-          const p = Math.sin(Math.PI * u);
-          toward(0.30 * p);
-          D.sr = ctxb.d0.sr + uy * 0.16 * p; D.sc = ctxb.d0.sc + ux * 0.16 * p;
-          if (u > 0.45) once(a, 'clash', function () {
+          const q = Math.sin(Math.PI * u);
+          toward(0.30 * q);
+          D.sr = ctxb.d0.sr + uy * 0.16 * q;
+          D.sc = ctxb.d0.sc + ux * 0.16 * q;
+          if (u > 0.45) once(choque, 'clash', function () {
             const mx = bodyPoint((A.sr + D.sr) / 2, (A.sc + D.sc) / 2, 0.62, 0);
-            FX.emit('sparks', mx.x, mx.y, { n: 16, color: THEME.fx.spark, color2: THEME.fx.spark2 });
-            FX.emit('slash', mx.x, mx.y, { dir: Math.atan2(-uy, -ux), scale: mx.k * 6, color: THEME.fx.spark2 });
-            shake(6); sfx('clash');
+            FX.emit('sparks', mx.x, mx.y, { n: 14 + i * 3, color: THEME.fx.spark, color2: THEME.fx.spark2 });
+            FX.emit('slash', mx.x, mx.y, { dir: dirAng + (i % 2 ? 0.7 : -0.7), scale: mx.k * 6, color: THEME.fx.spark2 });
+            shake(5 + i); sfx('clash');
+            if (i === 2) say('¡CLANG!', mx.x, mx.y - mx.k * 9, THEME.fx.spark, 0.9);
           });
         },
         exit: function () { toward(0); D.sr = ctxb.d0.sr; D.sc = ctxb.d0.sc; A.frame = 'idle'; D.frame = 'idle'; }
       };
-      acts.push(a);
+      push(choque);
     }
-    const cloud = {
-      d: 0.62,
+    const nube = {
+      d: 0.70,
       enter: function () {
         A.hidden = true; D.hidden = true;
         const mx = bodyPoint((A.sr + D.sr) / 2, (A.sc + D.sc) / 2, 0.55, 0);
@@ -445,20 +609,46 @@ function battleActs(A, D, ctxb) {
       },
       tick: function (u) {
         if (anim.cloud) anim.cloud.t = u;
-        if (u > 0.2) once(cloud, 'w1', function () { say('¡CLANG!', anim.cloud.x - anim.cloud.r * 0.5, anim.cloud.y - anim.cloud.r * 0.7, THEME.fx.spark); });
-        if (u > 0.5) once(cloud, 'w2', function () { sfx('clash'); shake(6); say('¡ZAS!', anim.cloud.x + anim.cloud.r * 0.5, anim.cloud.y - anim.cloud.r * 0.5, THEME.fx.spark2); });
-        if (u > 0.78) once(cloud, 'w3', function () { sfx('slash'); });
+        if (u > 0.15) once(nube, 'w1', function () {
+          say('¡ZAS!', anim.cloud.x - anim.cloud.r * 0.6, anim.cloud.y - anim.cloud.r * 0.7, THEME.fx.spark, 0.8);
+          sfx('slash');
+        });
+        if (u > 0.42) once(nube, 'w2', function () {
+          sfx('clash'); shake(6);
+          say('¡TOMA!', anim.cloud.x + anim.cloud.r * 0.6, anim.cloud.y - anim.cloud.r * 0.4, THEME.fx.spark2, 0.8);
+        });
+        if (u > 0.70) once(nube, 'w3', function () {
+          sfx('slash'); shake(5);
+          say('¡PLAF!', anim.cloud.x, anim.cloud.y - anim.cloud.r * 0.9, gold, 0.8);
+        });
       },
       exit: function () {
         A.hidden = false; D.hidden = false; anim.cloud = null;
         const c = chest();
-        FX.emit('dust', c.x, c.y, { n: 14 });
-        FX.emit('impact', c.x, c.y, { scale: c.k * 6 });
+        FX.emit('dust', c.x, c.y, { n: 16 });
+        FX.emit('impact', c.x, c.y, { scale: c.k * 7 });
         shake(8);
         D.lean = 0.28 * (ux > 0 ? 1 : -1);
       }
     };
-    acts.push(cloud);
+    push(nube);
+    const tajo = {
+      d: 0.40,
+      enter: function () { A.frame = 'attack'; },
+      tick: function (u) {
+        toward(0.34 * Math.sin(Math.PI * u));
+        if (u > 0.4) once(tajo, 'final', function () {
+          const c = chest();
+          FX.emit('slash', c.x, c.y, { dir: dirAng, scale: c.k * 10, color: gold });
+          FX.emit('impact', c.x, c.y, { scale: c.k * 10, color: gold });
+          FX.emit('sparks', c.x, c.y, { n: 22, color: gold, color2: THEME.fx.flash });
+          shake(12); sfx('capture');
+          say('¡RAS!', c.x, c.y - c.k * 12, gold, 1.0);
+        });
+      },
+      exit: function () { toward(0); A.frame = 'idle'; }
+    };
+    push(tajo);
   }
   return acts;
 }
@@ -490,14 +680,72 @@ function walkAct(actor, a0, a1, dur, arc, silent) {
   };
 }
 
+/* El alfil no derriba: su varita deshace al enemigo pixel a pixel. */
+function disintegrateAct(D, A) {
+  const glow = THEME.sprite[A.c].X || THEME.fx.magicW;
+  const spr = SPR[D.t];
+  let consumido = 0;                       // filas ya deshechas, contadas desde los pies
+  const a = {
+    d: 1.15 * BATTLE_STRETCH,
+    enter: function () {
+      sfx('magic');
+      A.frame = 'attack';
+      const c = bodyPoint(D.sr, D.sc, 0.5, 0);
+      FX.emit('impact', c.x, c.y, { scale: c.k * 8, color: glow });
+      say('¡DESINTEGRADO!', c.x, c.y - c.k * 14, glow, 1.3);
+    },
+    tick: function (u) {
+      /* el rayo se mantiene enganchado mientras dura la desintegracion */
+      if (u < 0.9 && Math.random() < 0.7) {
+        const w = bodyPoint(A.sr, A.sc, 1.02, (A.flipX ? -9 : 9));
+        const c = bodyPoint(D.sr, D.sc, 0.55 - u * 0.3, 0);
+        FX.emit('bolt', w.x, w.y, { x2: c.x, y2: c.y, color: glow });
+      }
+      D.white = !G.reduced && u < 0.8;
+      D.lift = 1.6 * u;
+      /* la magia consume la figura de abajo arriba; cada fila que desaparece
+         sale despedida en forma de motas con su propio color */
+      const objetivo = clamp(u / 0.85, 0, 1);
+      D.erode = objetivo;
+      const filaObj = Math.floor(objetivo * spr.h);
+      while (consumido < filaObj) {
+        const y1 = spr.h - consumido, y0 = Math.max(0, y1 - 2);
+        const motas = spritePixelsScreen(D, y0, y1);
+        for (let i = 0; i < motas.length; i += 2) {
+          const m = motas[i];
+          FX.emit('magic', m.x, m.y, { n: 1, color: Math.random() < 0.45 ? glow : m.color, scale: m.size });
+        }
+        consumido += 2;
+      }
+      if (u > 0.6 && Math.random() < 0.25) {
+        const c = bodyPoint(D.sr, D.sc, 0.5, 0);
+        FX.emit('sparks', c.x, c.y, { n: 3, color: glow, color2: THEME.fx.flash });
+      }
+    },
+    exit: function () {
+      D.hidden = true; D.white = false; D.erode = 1;
+      const c = bodyPoint(D.sr, D.sc, 0.45, 0);
+      FX.emit('magic', c.x, c.y, { n: 28, color: glow, scale: c.k });
+      FX.emit('impact', c.x, c.y, { scale: c.k * 10, color: glow });
+      FX.emit('stars', c.x, c.y, { n: 6 });
+      shake(6); sfx('death');
+    }
+  };
+  return a;
+}
+
 function deathAct(D) {
   const a = {
-    d: 0.58,
+    d: 0.58 * BATTLE_STRETCH,
     tick: function (u) {
-      if (u < 0.30) {
+      if (u < 0.34) {
         /* El parpadeo va a ~11 Hz: se anula con prefers-reduced-motion. */
-        D.white = G.reduced ? false : (Math.floor(u / 0.045) % 2) === 0;
-        D.lift = G.reduced ? 0 : 1.5 * Math.sin(u * 18);
+        D.white = G.reduced ? false : (Math.floor(u / 0.030) % 2) === 0;
+        D.lift = G.reduced ? 0 : 1.5 * Math.sin(u * 26);
+        if (!G.reduced && Math.random() < 0.35) {
+          const c = bodyPoint(D.sr, D.sc, 0.4 + Math.random() * 0.4, 0);
+          FX.emit('sparks', c.x, c.y, { n: 2, color: THEME.fx.spark, color2: THEME.fx.flash });
+        }
       }
       else {
         ONCE(a, 'burst', function () {
@@ -544,7 +792,7 @@ function buildAnim(move, next, san) {
   anim = {
     move: move, next: next, san: san, actors: [], hide: new Set([move.from]),
     words: [], cloud: null, flash: 0, rt: 0, seq: null,
-    spot: 0, spotTarget: 0, spotAt: null
+    spot: 0, spotTarget: 0, spotAt: null, powerLabel: null, powerBy: ''
   };
   const A = mkActor(move.from, move.t, move.c);
   anim.actors.push(A);
@@ -611,13 +859,22 @@ function buildAnim(move, next, san) {
     /* pausa dramatica: se miran */
     anim.spotAt = { sr: dp.sr, sc: dp.sc };
     acts.push({
-      d: 0.22,
-      enter: function () { if (!G.reduced) anim.spotTarget = 1; },
+      d: 0.40,
+      enter: function () {
+        if (!G.reduced) anim.spotTarget = 1;
+        /* Cada pieza anuncia su propio poder antes de emplearlo. */
+        const pw = POWER[move.t];
+        if (pw) {
+          anim.powerLabel = { text: pw.name, color: pw.color, t: 0, dur: 1.5 };
+          anim.powerBy = PIECE_NAME[move.t].toUpperCase();
+        }
+        sfx('check');
+      },
       tick: function (u) { D.lean = 0.05 * Math.sin(u * 22) * (ux > 0 ? 1 : -1); },
       exit: function () { D.lean = 0; }
     });
     Array.prototype.push.apply(acts, battleActs(A, D, ctxb));
-    acts.push(deathAct(D));
+    acts.push(move.t === 'b' ? disintegrateAct(D, A) : deathAct(D));
     /* ocupacion de la casilla */
     acts.push({
       d: 0.42,
@@ -752,9 +1009,34 @@ function undo() {
 }
 
 /* ================================ ESCENA =============================== */
-let cv, ctx, boardCv, boardCtx, DPR = 1, boardDirty = true;
+let cv, ctx, cv3d, boardCv, boardCtx, DPR = 1, boardDirty = true;
 let vigCv = null;              // vineta prerenderizada
 let spotCv = null, spotKey = '';  // foco del combate prerenderizado
+
+/* '#rrggbb' o 'rgba(r,g,b,a)' -> [r,g,b,a] normalizado, para WebGL. */
+const RGBA_CACHE = Object.create(null);
+function cssRGBA(str, mulA) {
+  let v = RGBA_CACHE[str];
+  if (!v) {
+    v = [1, 0, 1, 1];
+    if (typeof str === 'string') {
+      if (str.charAt(0) === '#') {
+        let h = str.slice(1);
+        if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+        const n = parseInt(h, 16);
+        v = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, 1];
+      } else {
+        const m = str.match(/rgba?\(([^)]+)\)/);
+        if (m) {
+          const p = m[1].split(',').map(function (x) { return parseFloat(x); });
+          v = [(p[0] || 0) / 255, (p[1] || 0) / 255, (p[2] || 0) / 255, p.length > 3 ? p[3] : 1];
+        }
+      }
+    }
+    RGBA_CACHE[str] = v;
+  }
+  return mulA == null ? v : [v[0], v[1], v[2], v[3] * mulA];
+}
 
 function hashRnd(n) { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
 
@@ -989,7 +1271,7 @@ function collectRenderables(time) {
       if (a.hidden) continue;
       list.push({
         sr: a.sr, sc: a.sc, t: a.t, c: a.c, lift: a.lift, sh: a.t === 'r' ? 1.15 : 1,
-        o: { frame: a.frame, flipX: a.flipX, lift: a.lift, alpha: a.alpha, white: a.white, squash: a.squash, lean: a.lean, scale: a.scale }
+        o: { frame: a.frame, flipX: a.flipX, lift: a.lift, alpha: a.alpha, white: a.white, squash: a.squash, lean: a.lean, scale: a.scale, erode: a.erode }
       });
     }
   }
@@ -997,7 +1279,124 @@ function collectRenderables(time) {
   return list;
 }
 
+/* ------------------------------ escena 3D ------------------------------ */
+function facingIdle(c) { return c === 'w' ? 0 : Math.PI; }
+function facingTo(a, other) {
+  if (!other) return a.flipX ? Math.PI : 0;
+  const dx = (other.sc - a.sc), dz = (other.sr - a.sr);
+  if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) return a.flipX ? Math.PI : 0;
+  return Math.atan2(-dz, dx);
+}
+
+function buildScene3d(time) {
+  const pieces = [];
+  const marks = [];
+  const b = G.state.b;
+  const breathe = G.reduced ? 0 : 0.34;
+  const pulse = 0.5 + 0.5 * Math.sin(time * 4.2);
+
+  for (let i = 0; i < 64; i++) {
+    const pc = b[i];
+    if (!pc) continue;
+    if (anim && anim.hide.has(i)) continue;
+    const p = idxToRC(i);
+    let lift = breathe * (0.5 + 0.5 * Math.sin(time * 1.6 + i * 0.83));
+    const mine = pc.c === G.state.turn && !G.busy && !G.over;
+    if (i === G.sel) lift += 3.4 + 0.6 * Math.sin(time * 7);
+    else if (i === G.hover && mine) lift += 1.8;
+    pieces.push({
+      t: pc.t, c: pc.c, sr: p.sr, sc: p.sc,
+      lift: lift, facing: facingIdle(pc.c)
+    });
+  }
+  if (anim) {
+    const A = anim.actors[0], D = anim.actors[1];
+    for (const a of anim.actors) {
+      if (a.hidden) continue;
+      const otro = (a === A && D && !D.hidden) ? D : (a === D ? A : null);
+      pieces.push({
+        t: a.t, c: a.c, sr: a.sr, sc: a.sc,
+        lift: a.lift, squash: a.squash, scale: a.scale, lean: a.lean,
+        white: a.white, alpha: a.alpha, erode: a.erode,
+        facing: facingTo(a, otro)
+      });
+    }
+  }
+
+  const mark = function (idx, color, r, soft) {
+    const p = idxToRC(idx);
+    marks.push({ sr: p.sr, sc: p.sc, color: color, r: r, soft: soft });
+  };
+  if (G.last) {
+    mark(G.last.from, cssRGBA(THEME.board.lastFrom, 1.6), 0.47, false);
+    mark(G.last.to, cssRGBA(THEME.board.lastTo, 1.6), 0.47, false);
+  }
+  if (G.hover >= 0 && !G.busy && !G.over) mark(G.hover, cssRGBA(THEME.board.hover, 0.35), 0.47, false);
+  if (G.sel >= 0) mark(G.sel, cssRGBA(THEME.board.sel, 0.30 + 0.22 * pulse), 0.47, false);
+  for (const m of G.targets) {
+    if (m.cap) mark(m.to, cssRGBA(THEME.board.capRing, 0.40 + 0.30 * pulse), 0.46, true);
+    else mark(m.to, cssRGBA(THEME.board.moveDot, 0.55 + 0.25 * pulse), 0.17, true);
+  }
+  const st = G.state;
+  if (Engine.inCheck(st, st.turn)) {
+    const ks = kingSquare(st.turn);
+    if (ks >= 0 && (!anim || !anim.hide.has(ks))) {
+      mark(ks, cssRGBA(THEME.board.checkGlow, 0.55 + 0.45 * pulse), 0.47, true);
+    }
+  }
+  return {
+    pieces: pieces, marks: marks,
+    shake: FX.shake || { x: 0, y: 0 },
+    bg: THEME.scene.skyBot
+  };
+}
+
+/* Coordenadas proyectadas al borde del tablero, tambien en 3D. */
+function drawCoords3d(g) {
+  g.save();
+  g.fillStyle = THEME.ui.inkDim;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const fs = Math.max(9, Math.round(L.h * 0.019));
+  g.font = 'bold ' + fs + 'px ui-monospace, monospace';
+  g.lineWidth = 3; g.lineJoin = 'round'; g.strokeStyle = 'rgba(0,0,0,0.75)';
+  const etiqueta = function (txt, x, y) { g.strokeText(txt, x, y); g.fillText(txt, x, y); };
+  const cerca = flip ? -0.92 : 7.92;      // borde que da al jugador
+  const lado = flip ? 7.92 : -0.92;
+  for (let sc = 0; sc < 8; sc++) {
+    const w = R3.squareWorld(cerca, sc);
+    const p = R3.worldToScreen(w.x, 0.02, w.z);
+    if (p.ok) etiqueta(String.fromCharCode(97 + sc), p.x, p.y);
+  }
+  for (let sr = 0; sr < 8; sr++) {
+    const w = R3.squareWorld(sr, lado);
+    const p = R3.worldToScreen(w.x, 0.02, w.z);
+    if (p.ok) etiqueta(String(8 - sr), p.x, p.y);
+  }
+  g.restore();
+}
+
+function render3d(time) {
+  const g = ctx;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, L.w, L.h);
+  try { R3.draw(buildScene3d(time)); } catch (e) { }
+  try { drawCoords3d(g); } catch (e) { }
+  try { FX.draw(g); } catch (e) { }
+  if (anim && anim.cloud) {
+    try { FX.drawFightCloud(g, anim.cloud.x, anim.cloud.y, anim.cloud.r, anim.cloud.t, anim.cloud.seed); } catch (e) { }
+  }
+  if (anim) {
+    for (const w of anim.words) {
+      try { FX.drawComicWord(g, w.x, w.y - 26 * (w.t / w.dur), w.text, w.t / w.dur, w.color); } catch (e) { }
+    }
+  }
+  drawOverlays(g);
+  drawPowerLabel(g);
+}
+
 function render(time) {
+  if (view3d && R3.ready()) { render3d(time); return; }
   const g = ctx;
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   if (boardDirty) buildBoard();
@@ -1030,7 +1429,7 @@ function render(time) {
     for (const a of duel) {
       drawSprite(g, a.t, a.c, a.sr, a.sc, {
         frame: a.frame, flipX: a.flipX, lift: a.lift, alpha: a.alpha,
-        white: a.white, squash: a.squash, lean: a.lean, scale: a.scale
+        white: a.white, squash: a.squash, lean: a.lean, scale: a.scale, erode: a.erode
       });
     }
   }
@@ -1047,11 +1446,41 @@ function render(time) {
   }
   g.restore();
 
+  drawOverlays(g);
+  drawPowerLabel(g);
+}
+
+/* Rotulo del poder: quien ataca y con que. */
+function drawPowerLabel(g) {
+  if (anim && anim.powerLabel) {
+    const pl = anim.powerLabel;
+    const u = clamp(pl.t / pl.dur, 0, 1);
+    const y = L.h * 0.13;
+    try {
+      FX.drawComicWord(g, L.cx, y, pl.text, u, pl.color);
+      if (anim.powerBy) {
+        g.save();
+        g.globalAlpha = (u < 0.15 ? u / 0.15 : u > 0.8 ? (1 - u) / 0.2 : 1) * 0.95;
+        g.font = 'bold ' + Math.max(10, Math.round(L.h * 0.020)) + 'px ui-monospace, monospace';
+        g.textAlign = 'center';
+        g.textBaseline = 'bottom';
+        g.lineWidth = 4; g.strokeStyle = '#15151f'; g.lineJoin = 'round';
+        g.strokeText(anim.powerBy, L.cx, y - L.h * 0.035);
+        g.fillStyle = THEME.ui.ink;
+        g.fillText(anim.powerBy, L.cx, y - L.h * 0.035);
+        g.restore();
+      }
+    } catch (e) { }
+  }
+
+}
+
+/* Fogonazo a pantalla completa y vineta: van encima de todo, fuera de la
+   sacudida, y son comunes a las dos vistas. */
+function drawOverlays(g) {
   if (anim && anim.flash > 0.01) {
     try { FX.drawFlash(g, L.w, L.h, anim.flash * 0.55, THEME.fx.flash); } catch (e) { }
   }
-
-  /* vinieta (capa prerenderizada) */
   if (vigCv) g.drawImage(vigCv, 0, 0, L.w, L.h);
 }
 
@@ -1118,6 +1547,7 @@ function syncUI() {
   UI.moves.scrollTop = UI.moves.scrollHeight;
   UI.undo.disabled = !G.stack.length || G.busy;
   if (UI.flip) UI.flip.disabled = G.busy;
+  if (UI.view) UI.view.disabled = G.busy || !R3.ready();
   UI.hint.style.display = (G.busy && anim && anim.move && anim.move.cap) ? 'block' : 'none';
 }
 
@@ -1187,6 +1617,7 @@ function toggleFlip() {
   if (G.busy) return;
   flip = !flip;
   boardDirty = true;
+  if (R3.ready()) R3.setFlip(flip);
   syncUI();
 }
 
@@ -1241,6 +1672,8 @@ function bindInput() {
     else if (k === 'n') { hideBanner(); newGame(); }
     else if (k === 'f') toggleFlip();
     else if (k === 'm') { UI.sound.click(); }
+    else if (k === 'v') setView(view3d ? '2d' : '3d');
+    else if (k === 'c') cycleCam();
     else return;
     syncUI();
   });
@@ -1258,6 +1691,10 @@ function update(dt) {
       else {
         anim.flash = Math.max(0, anim.flash - dt * 2.4);
         anim.spot += (anim.spotTarget - anim.spot) * Math.min(1, dt * 5.5);
+        if (anim.powerLabel) {
+          anim.powerLabel.t += sdt;
+          if (anim.powerLabel.t >= anim.powerLabel.dur) anim.powerLabel = null;
+        }
         for (let i = anim.words.length - 1; i >= 0; i--) {
           anim.words[i].t += sdt;
           if (anim.words[i].t >= anim.words[i].dur) anim.words.splice(i, 1);
@@ -1269,6 +1706,7 @@ function update(dt) {
     if (G.aiTimer <= 0) { doAIMove(); syncUI(); }
   }
   try { FX.update(dt); } catch (e) { }
+  if (view3d && R3.ready()) { try { R3.update(dt); } catch (e) { } }
   if (G.banner) {
     G.banner.t += dt;
     if (G.banner.t > G.banner.life) { G.banner = null; hideBanner(); }
@@ -1299,6 +1737,34 @@ function resize() {
   cv.style.height = h + 'px';
   layout(w, h);
   boardDirty = true;
+  if (cv3d && R3.ready()) { try { R3.resize(w, h, DPR); } catch (e) { } }
+}
+
+/* ------------------------------ vistas ------------------------------ */
+function setView(v) {
+  if (G.busy) return false;                 // cambiar de vista a media animacion no
+  const quiere3d = v === '3d';
+  if (quiere3d && !R3.ready()) return false;
+  view3d = quiere3d;
+  document.body.classList.toggle('v3d', view3d);
+  if (cv3d) cv3d.style.display = view3d ? 'block' : 'none';
+  if (UI.camWrap) UI.camWrap.hidden = !view3d;
+  if (UI.view) UI.view.value = view3d ? '3d' : '2d';
+  boardDirty = true;
+  if (view3d) { try { R3.setFlip(flip); R3.resize(L.w, L.h, DPR); } catch (e) { } }
+  syncUI();
+  return true;
+}
+function setCam(name) {
+  if (!R3.ready()) return;
+  R3.setCamera(name);
+  if (UI.cam) UI.cam.value = R3.getCamera();
+}
+function cycleCam() {
+  if (!view3d || !R3.ready()) return;
+  const list = R3.cameraList();
+  const i = list.findIndex(function (c) { return c.id === R3.getCamera(); });
+  setCam(list[(i + 1) % list.length].id);
 }
 
 function init() {
@@ -1309,7 +1775,7 @@ function init() {
     material: $('material'), moves: $('moves'), undo: $('undo'),
     banner: $('banner'), bannerT: $('bannerT'), bannerS: $('bannerS'),
     promo: $('promo'), promoRow: $('promoRow'), sound: $('sound'), hint: $('hint'),
-    flip: $('flip')
+    flip: $('flip'), view: $('view'), cam: $('cam'), camWrap: $('camWrap')
   };
   G.reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   /* Con movimiento reducido no se acelera el combate: se suprime. El usuario
@@ -1319,6 +1785,14 @@ function init() {
   applyThemeVars();
   harden();
   buildSheets();
+  cv3d = $('board3d');
+  let hay3d = false;
+  try { hay3d = !!(cv3d && R3.init(cv3d, SPR)); } catch (e) { hay3d = false; }
+  if (!hay3d && cv3d) {
+    if (UI.view) { UI.view.value = '2d'; UI.view.disabled = true; UI.view.title = 'Este navegador no tiene WebGL'; }
+  }
+  /* Se arranca en 2.5D: el lienzo 3D no debe quedarse componiendo de balde. */
+  if (cv3d) cv3d.style.display = 'none';
   resize();
   window.addEventListener('resize', resize);
   /* El alto de #stage cambia sin que haya evento 'resize': en el diseno de una
@@ -1330,6 +1804,17 @@ function init() {
   $('new').onclick = function () { armSound(); hideBanner(); newGame(); };
   UI.undo.onclick = function () { armSound(); hideBanner(); undo(); };
   $('flip').onclick = function () { armSound(); toggleFlip(); };
+  if (UI.view) {
+    UI.view.onchange = function (e) {
+      armSound();
+      if (!setView(e.target.value)) e.target.value = view3d ? '3d' : '2d';
+    };
+    UI.view.value = '2d';
+  }
+  if (UI.cam) {
+    UI.cam.onchange = function (e) { armSound(); setCam(e.target.value); };
+    UI.cam.value = R3.ready() ? R3.getCamera() : 'clasica';
+  }
   $('mode').onchange = function (e) { armSound(); G.mode = e.target.value; hideBanner(); newGame(); };
   $('mode').value = G.mode;
   $('level').onchange = function (e) { armSound(); G.aiLevel = parseInt(e.target.value, 10) || 2; };
@@ -1378,7 +1863,9 @@ window.__BC = {
   startMove: startMove, skipAnim: skipAnim, newGame: newGame, undo: undo,
   pickSquare: pickSquare, anchorOfIdx: anchorOfIdx, anchorOf: anchorOf, syncUI: syncUI,
   pix: function () { return L.pix; },
-  setFlip: function (v) { flip = !!v; boardDirty = true; },
+  setFlip: function (v) { flip = !!v; boardDirty = true; if (R3.ready()) R3.setFlip(flip); },
+  setView: setView, setCam: setCam, R3: R3,
+  get view() { return view3d ? '3d' : '2d'; },
   setState: function (st) { G.state = st; G.hist = [Engine.key(st)]; G.stack = []; G.log = []; G.over = null; G.sel = -1; G.targets = []; G.last = null; G.busy = false; anim = null; FX.reset(); syncUI(); },
   get anim() { return anim; },
   get busy() { return G.busy; }

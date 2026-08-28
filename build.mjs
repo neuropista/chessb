@@ -15,6 +15,7 @@ const ORDER = [
   'ai.js',
   'spr_pawn.js', 'spr_knight.js', 'spr_bishop.js', 'spr_rook.js', 'spr_queen.js', 'spr_king.js',
   'fx.js',
+  'render3d.js',
   'audio.js',
   'game.js'
 ];
