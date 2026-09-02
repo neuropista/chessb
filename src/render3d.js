@@ -394,19 +394,25 @@ const R3 = (function () {
       cam.fov.toFixed(2) + ',' + W + 'x' + H;
     if (key !== fitKey) { fitVal = fitDistance(el, az, cam.ty, cam.fov); fitKey = key; }
     const tgt = [0, cam.ty, 0];
-    return { eye: eyeAt(fitVal * (cam.zoom || 1), el, az, cam.ty), tgt: tgt };
+    return { eye: eyeAt(fitVal * (cam.zoom || 1) * (1 - 0.04 * punchK), el, az, cam.ty), tgt: tgt };
   }
 
   /* La transicion de camara se mueve sola dentro del renderizador: si dependiera
      de que alguien llame a update(dt) desde fuera, un fallo en esa llamada
      dejaria la camara congelada sin que nada mas se notase. */
   let lastTick = 0;
+  let punchK = 0;          // tiron de zoom tras un golpe (decae solo)
+  function punch(k) {
+    k = typeof k === 'number' && isFinite(k) ? k : 0;
+    punchK = Math.min(1, Math.max(punchK, k));
+  }
   function tickCam() {
     const ahora = (typeof performance !== 'undefined' && performance.now
       ? performance.now() : Date.now()) / 1000;
     const dt = lastTick ? Math.min(0.05, Math.max(0, ahora - lastTick)) : 1 / 60;
     lastTick = ahora;
     const k = Math.min(1, dt * 6);
+    if (punchK > 0) punchK = Math.max(0, punchK - dt * 6);
     for (let i = 0; i < CAM_KEYS.length; i++) {
       const key = CAM_KEYS[i];
       const objetivo = camTarget[key];
@@ -699,7 +705,8 @@ const R3 = (function () {
     setCamera: setCamera, getCamera: getCamera, cameraList: cameraList,
     setFlip: setFlip, project: project, pick: pick, ready: ready,
     voxelSize: voxelSize, worldToScreen: worldToScreen, squareWorld: squareWorld,
-    lastError: lastError, stats: stats, camMoving: camMoving,
+    lastError: lastError, stats: stats, camMoving: camMoving, punch: punch,
+    punchLeft: function () { return punchK; },
     camState: function () { return { nombre: camName, el: cam.el, az: cam.az, ty: cam.ty, fov: cam.fov }; }
   };
 })();

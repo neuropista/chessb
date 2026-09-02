@@ -45,7 +45,15 @@ conexión, ni dependencias: no hay una sola petición de red en toda la página.
   algebraica (SAN) desambiguada.
 - **Modos**: Humano vs Humano, Humano vs IA, IA vs Humano e IA vs IA, con tres niveles
   (Escudero / Caballero / Gran Maestre).
-- **Sonido sintetizado** con Web Audio (sin archivos), silenciable.
+- **Sonido sintetizado** con Web Audio (sin archivos): 28 voces chiptune con compresor,
+  reverberación sintetizada y **paneo estéreo por columna** (un combate en la columna h se oye a
+  la derecha). Cada poder tiene su voz: silbido de lanza, galope, retumbo sísmico, chasquido
+  arcano, trueno, fanfarria y la desintegración. Control de volumen que se recuerda entre partidas.
+- **Golpes con peso**: *hit-stop* (la animación se congela unos milisegundos en cada impacto
+  fuerte), tirón de zoom de la cámara hacia el punto del golpe, estelas translúcidas en las
+  cargas, ondas expansivas, grietas en el suelo del gólem, rayos con ramas y halo, ascuas, y un
+  vórtice que absorbe los píxeles del desintegrado hacia la vara del hechicero. Todo se apaga con
+  `prefers-reduced-motion`.
 - Ritmo de las animaciones configurable (Épico / Normal / Rápido / Sin combate), combate
   saltable con clic o **Espacio**, y respeto por `prefers-reduced-motion`.
 
@@ -61,6 +69,7 @@ conexión, ni dependencias: no hay una sola petición de red en toda la página.
 | Cambiar 2.5D ↔ 3D | Selector *Vista* o `V` |
 | Rotar la cámara 3D | Selector *Cámara* o `C` |
 | Silenciar | Botón o `M` |
+| Volumen | Control deslizante junto al botón de sonido (se recuerda) |
 
 ## Estructura del repositorio
 
@@ -97,9 +106,10 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
   presupuesto de tiempo. El nivel 3 puntúa 100 % contra el nivel 1.
 - **Efectos**: 600 fotogramas con un contexto 2D falso — `save`/`restore` balanceados, sin
   `NaN`, sin `shadowBlur`, todas las partículas mueren.
-- **Audio**: los 16 sonidos con un doble de `AudioContext`.
+- **Audio**: las 28 voces con un doble de `AudioContext` completo y con otro mínimo (sin
+  compresor, reverb ni paneo); limitador de repeticiones, paneo acotado, tono y volumen.
 
-**Navegador** (`node tools/e2e.mjs`) — 43 secciones (84 comprobaciones) en Chromium sin cabeza, entre ellas:
+**Navegador** (`node tools/e2e.mjs`) — 47 secciones (99 comprobaciones) en Chromium sin cabeza, entre ellas:
 
 | Qué comprueba | Cómo |
 |---|---|
@@ -116,6 +126,10 @@ node tools/e2e.mjs      # pruebas de extremo a extremo en Chromium
 | Vista 3D | 384 comprobaciones de hit-test (3 cámaras × 2 orientaciones), los seis poderes en 3D y el conmutador entre vistas |
 | Cámaras 3D | el selector solo existe en 3D y las tres cámaras llegan a su ángulo con el bucle del juego anulado |
 | Audio resistente | un `AudioContext` suspendido a mano revive con el siguiente sonido y con el botón *Sonido* |
+| Sonido con carácter | cada poder dispara sus voces propias; una captura en la columna h se panea a la derecha |
+| Golpe con peso | hit-stop, tirón de cámara y estela en la embestida; ninguno con `prefers-reduced-motion` |
+| Ajustes | el volumen y el silencio se recuerdan al reabrir, sin crear audio antes del primer gesto |
+| Crónica | capturas, jaques y la última jugada van marcados; el distintivo del turno late |
 
 El juego pasó además una revisión adversarial en seis dimensiones (reglas, animación, render,
 fidelidad al encargo, robustez e interfaz), cuyos hallazgos se corrigieron con una prueba de

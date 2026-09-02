@@ -11,7 +11,7 @@ const FX = (function () {
   // codigos de tipo (enteros = switch rapido)
   var K_DUST = 1, K_SPARK = 2, K_SLASH = 3, K_IMPACT = 4, K_STAR = 5,
       K_MAGIC = 6, K_BOLT = 7, K_STONE = 8, K_PIXEL = 9, K_SMOKE = 10,
-      K_POOF = 11;
+      K_POOF = 11, K_RING = 12, K_CRACK = 13, K_VORTEX = 14, K_EMBER = 15;
 
   // paletas (constantes, no se crean por frame)
   var C_DUST  = ['#d8cfb4', '#bdb193', '#9c9179', '#efe7cf'];
@@ -80,7 +80,7 @@ const FX = (function () {
       s: 2, grid: 2, col: '#ffffff', col2: '#ffffff',
       rot: 0, spin: 0, r: 0, r1: 0,
       amp: 0, freq: 0, ph: 0, bnc: 0, a: 1,
-      seg: null, ns: 0
+      seg: null, ns: 0, nb: 0
     };
   }
 
@@ -95,7 +95,7 @@ const FX = (function () {
     p.px = p.py = 0; p.vx = p.vy = 0; p.ox = p.oy = 0; p.gy = 0;
     p.g = 0; p.drag = 0; p.s = 2; p.grid = 2; p.rot = 0; p.spin = 0;
     p.r = 0; p.r1 = 0; p.amp = 0; p.freq = 0; p.ph = 0; p.bnc = 0;
-    p.a = 1; p.ns = 0; p.col = '#ffffff'; p.col2 = '#ffffff';
+    p.a = 1; p.ns = 0; p.nb = 0; p.col = '#ffffff'; p.col2 = '#ffffff';
     return p;
   }
 
@@ -246,8 +246,8 @@ const FX = (function () {
         p.k = K_BOLT;
         p.x = x; p.y = y;
         var bx = num(o.x2, x + 40), by = num(o.y2, y);
-        if (!p.seg) p.seg = new Float32Array(26);
-        var segs = 10;                      // 10 tramos -> 11 puntos
+        if (!p.seg || p.seg.length < 40) p.seg = new Float32Array(40);
+        var segs = 10;                      // 10 tramos -> 11 puntos (22 floats)
         var dx = bx - x, dy = by - y;
         var d = Math.sqrt(dx * dx + dy * dy);
         var nx = 0, ny = 0;
@@ -260,6 +260,27 @@ const FX = (function () {
           p.seg[i * 2 + 1] = y + dy * t + ny * off;
         }
         p.ns = segs;
+        /* ramas: hasta dos horquillas cortas que nacen de un punto intermedio
+           (3 puntos cada una, a partir del float 22) */
+        p.nb = 0;
+        if (d > 30) {
+          var nbr = o.branches === undefined ? 2 : (num(o.branches, 0) | 0);
+          if (nbr > 2) nbr = 2;
+          for (var b = 0; b < nbr; b++) {
+            var at = 3 + ((rnd(0, 5)) | 0);          // indice 3..7
+            var side = b === 0 ? 1 : -1;
+            var bl = d * rnd(0.16, 0.30);
+            var ang = Math.atan2(dy, dx) + side * rnd(0.55, 1.1);
+            var ox = p.seg[at * 2], oy = p.seg[at * 2 + 1];
+            var base = 22 + b * 6;
+            p.seg[base] = ox; p.seg[base + 1] = oy;
+            p.seg[base + 2] = ox + Math.cos(ang) * bl * 0.5 + nx * rnd(-jag, jag) * 0.5;
+            p.seg[base + 3] = oy + Math.sin(ang) * bl * 0.5 + ny * rnd(-jag, jag) * 0.5;
+            p.seg[base + 4] = ox + Math.cos(ang) * bl;
+            p.seg[base + 5] = oy + Math.sin(ang) * bl;
+            p.nb++;
+          }
+        }
         p.max = p.life = life > 0 ? life : 0.20;
         p.grid = 3;
         p.col = col || '#9be7ff';
@@ -364,6 +385,98 @@ const FX = (function () {
         break;
       }
 
+      case 'ring': {   // onda expansiva: anillo fino que crece y se apaga
+        p = spawn(); if (!p) break;
+        p.k = K_RING;
+        p.x = x; p.y = y;
+        p.r = 3 * scale;
+        p.r1 = 58 * scale * (power > 0 ? power : 1);
+        p.amp = num(o.flat, 0.5);          // achatamiento vertical (1 = circulo)
+        p.max = p.life = life > 0 ? life : 0.42;
+        p.grid = 2;
+        p.s = num(o.width, 3);
+        p.col = col || '#ffffff';
+        p.col2 = col2 || col || '#ffe08a';
+        break;
+      }
+
+      case 'crack': {   // grietas en el suelo, radiales, quietas, que se cierran
+        var cn = cnt > 0 ? cnt : 5;
+        var clen = 34 * scale * (power > 0 ? power : 1);
+        for (i = 0; i < cn; i++) {
+          p = spawn(); if (!p) break;
+          p.k = K_CRACK;
+          p.x = x; p.y = y;
+          if (!p.seg || p.seg.length < 40) p.seg = new Float32Array(40);
+          a = (i / cn) * TAU + rnd(-0.35, 0.35);
+          var pts = 5, cx = x, cy = y;
+          var L = clen * rnd(0.6, 1.25);
+          p.seg[0] = cx; p.seg[1] = cy;
+          for (var j = 1; j <= pts; j++) {
+            var aa = a + rnd(-0.5, 0.5);
+            cx += Math.cos(aa) * (L / pts);
+            cy += Math.sin(aa) * (L / pts) * 0.45;      // perspectiva del suelo
+            p.seg[j * 2] = cx; p.seg[j * 2 + 1] = cy;
+          }
+          p.ns = pts;
+          p.max = p.life = life > 0 ? life : rnd(0.9, 1.4);
+          p.grid = 2;
+          p.s = 3;
+          p.col = col || '#1c1712';
+          p.col2 = col2 || '#7d6a4a';
+        }
+        break;
+      }
+
+      case 'vortex': {   // motas absorbidas en espiral hacia un punto (x2,y2)
+        var vn = cnt > 0 ? cnt : 16;
+        var tx = num(o.x2, x), ty = num(o.y2, y - 40);
+        var sprite2 = o.sprite;
+        for (i = 0; i < vn; i++) {
+          p = spawn(); if (!p) break;
+          p.k = K_VORTEX;
+          var sx0 = x + rnd(-8, 8) * scale, sy0 = y + rnd(-8, 8) * scale, scol = null;
+          if (sprite2 && sprite2.length) {
+            var sp3 = sprite2[(Math.random() * sprite2.length) | 0];
+            if (sp3) { sx0 = num(sp3.x, sx0); sy0 = num(sp3.y, sy0); scol = sp3.color; }
+          }
+          p.ox = tx; p.oy = ty;                         // centro de la espiral
+          var rdx = sx0 - tx, rdy = sy0 - ty;
+          p.r = Math.sqrt(rdx * rdx + rdy * rdy) || 1;  // radio inicial
+          p.r1 = p.r;
+          p.ph = Math.atan2(rdy, rdx);
+          p.spin = rnd(5, 9) * (Math.random() < 0.5 ? -1 : 1);
+          p.x = p.px = sx0; p.y = p.py = sy0;
+          p.max = p.life = life > 0 ? life : rnd(0.45, 0.8);
+          p.s = num(o.pixel, 3);
+          p.grid = 2;
+          p.col = scol || col || '#b98cff';
+          p.col2 = col2 || '#ffffff';
+        }
+        break;
+      }
+
+      case 'ember': {   // ascuas que suben oscilando y parpadean
+        var en = cnt > 0 ? cnt : 10;
+        for (i = 0; i < en; i++) {
+          p = spawn(); if (!p) break;
+          p.k = K_EMBER;
+          p.ox = x + rnd(-10, 10) * scale;
+          p.oy = y + rnd(-4, 4);
+          p.amp = rnd(3, 9) * scale;
+          p.freq = rnd(4, 8);
+          p.ph = rnd(0, TAU);
+          p.vy = rnd(-60, -22) * power;
+          p.x = p.px = p.ox; p.y = p.py = p.oy;
+          p.max = p.life = life > 0 ? life : rnd(0.5, 1.1);
+          p.s = rnd(2, 3) | 0;
+          p.grid = 2;
+          p.col = col || '#ffb347';
+          p.col2 = col2 || '#fff3c4';
+        }
+        break;
+      }
+
       default:
         break;   // tipo desconocido: se ignora en silencio
     }
@@ -421,7 +534,28 @@ const FX = (function () {
       case K_SLASH:
       case K_IMPACT:
       case K_BOLT:
+      case K_RING:
+      case K_CRACK:
         break;   // estaticos, solo envejecen
+
+      case K_VORTEX: {
+        /* el radio se cierra con el tiempo de vida y el giro se acelera al final */
+        var tv = p.max > 0 ? p.life / p.max : 0;      // 1 -> 0
+        var ease = tv * tv;
+        p.r = p.r1 * ease;
+        p.ph += p.spin * (1 + (1 - tv) * 2.5) * dt;
+        p.x = p.ox + Math.cos(p.ph) * p.r;
+        p.y = p.oy + Math.sin(p.ph) * p.r * 0.7;
+        break;
+      }
+
+      case K_EMBER: {
+        p.ph += p.freq * dt;
+        p.oy += p.vy * dt;
+        p.x = p.ox + Math.cos(p.ph) * p.amp;
+        p.y = p.oy;
+        break;
+      }
 
       case K_STONE: {
         p.vy += p.g * dt;
@@ -472,6 +606,10 @@ const FX = (function () {
         case K_PIXEL:  drawPixel(ctx, p, t); break;
         case K_SMOKE:  drawSmoke(ctx, p, t); break;
         case K_POOF:   drawPoof(ctx, p, t); break;
+        case K_RING:   drawRing(ctx, p, t); break;
+        case K_CRACK:  drawCrack(ctx, p, t); break;
+        case K_VORTEX: drawVortex(ctx, p, t); break;
+        case K_EMBER:  drawEmber(ctx, p, t); break;
         default: break;
       }
     }
@@ -566,12 +704,22 @@ const FX = (function () {
     if (!p.seg || p.ns < 1) return;
     var g = p.grid;
     var a = clamp01(t * 1.6);
+    var i, b, base;
+    // halo ancho y tenue
+    ctx.globalAlpha = a * 0.22;
+    ctx.fillStyle = p.col;
+    for (i = 0; i < p.ns; i++) {
+      pixLine(ctx, p.seg[i * 2], p.seg[i * 2 + 1], p.seg[i * 2 + 2], p.seg[i * 2 + 3], 12, g);
+    }
     // pasada gruesa de color
     ctx.globalAlpha = a * 0.85;
-    ctx.fillStyle = p.col;
-    var i;
     for (i = 0; i < p.ns; i++) {
       pixLine(ctx, p.seg[i * 2], p.seg[i * 2 + 1], p.seg[i * 2 + 2], p.seg[i * 2 + 3], 6, g);
+    }
+    for (b = 0; b < p.nb; b++) {
+      base = 22 + b * 6;
+      pixLine(ctx, p.seg[base], p.seg[base + 1], p.seg[base + 2], p.seg[base + 3], 4, g);
+      pixLine(ctx, p.seg[base + 2], p.seg[base + 3], p.seg[base + 4], p.seg[base + 5], 3, g);
     }
     // nucleo blanco fino
     ctx.globalAlpha = a;
@@ -579,6 +727,75 @@ const FX = (function () {
     for (i = 0; i < p.ns; i++) {
       pixLine(ctx, p.seg[i * 2], p.seg[i * 2 + 1], p.seg[i * 2 + 2], p.seg[i * 2 + 3], 2, g);
     }
+    for (b = 0; b < p.nb; b++) {
+      base = 22 + b * 6;
+      pixLine(ctx, p.seg[base], p.seg[base + 1], p.seg[base + 2], p.seg[base + 3], 2, g);
+    }
+  }
+
+  function drawRing(ctx, p, t) {
+    var prog = 1 - t;
+    var e = 1 - (1 - prog) * (1 - prog);                 // ease-out
+    var r = p.r + (p.r1 - p.r) * e;
+    var g = p.grid;
+    var steps = Math.min(120, Math.max(12, Math.round(r * 0.7)));
+    var w = Math.max(g, p.s * (0.4 + t * 0.8));
+    var i, a, x, y;
+    ctx.globalAlpha = clamp01(t * 0.9);
+    ctx.fillStyle = p.col;
+    for (i = 0; i < steps; i++) {
+      a = (i / steps) * TAU;
+      x = p.x + Math.cos(a) * r;
+      y = p.y + Math.sin(a) * r * p.amp;
+      rect(ctx, x - w * 0.5, y - w * 0.5, w, w, g);
+    }
+    // eco interior, mas tenue y mas pequeno
+    var r2 = r * 0.72;
+    ctx.globalAlpha = clamp01(t * 0.45);
+    ctx.fillStyle = p.col2;
+    for (i = 0; i < steps; i += 2) {
+      a = (i / steps) * TAU;
+      x = p.x + Math.cos(a) * r2;
+      y = p.y + Math.sin(a) * r2 * p.amp;
+      rect(ctx, x - g * 0.5, y - g * 0.5, g, g, g);
+    }
+  }
+
+  function drawCrack(ctx, p, t) {
+    if (!p.seg || p.ns < 1) return;
+    var g = p.grid;
+    /* aparece de golpe y se cierra en el ultimo tercio */
+    var a = t < 0.35 ? t / 0.35 : 1;
+    var grow = 1 - t;                                     // 0 -> 1
+    var head = Math.min(1, grow * 4);                     // se abre rapido
+    var i, n2 = Math.max(1, Math.round(p.ns * head));
+    ctx.globalAlpha = clamp01(a * 0.9);
+    ctx.fillStyle = p.col;
+    for (i = 0; i < n2; i++) {
+      pixLine(ctx, p.seg[i * 2], p.seg[i * 2 + 1], p.seg[i * 2 + 2], p.seg[i * 2 + 3], p.s, g);
+    }
+    ctx.globalAlpha = clamp01(a * 0.5);
+    ctx.fillStyle = p.col2;
+    for (i = 0; i < n2; i++) {
+      pixLine(ctx, p.seg[i * 2] + 1, p.seg[i * 2 + 1] - 2, p.seg[i * 2 + 2] + 1, p.seg[i * 2 + 3] - 2, 1, g);
+    }
+  }
+
+  function drawVortex(ctx, p, t) {
+    ctx.globalAlpha = clamp01(0.35 + t * 0.7);
+    ctx.fillStyle = p.col;
+    pixLine(ctx, p.px, p.py, p.x, p.y, p.s, p.grid);   // estela corta
+    if (t < 0.5) {
+      ctx.fillStyle = p.col2;
+      rect(ctx, p.x - 1, p.y - 1, 2, 2, p.grid);
+    }
+  }
+
+  function drawEmber(ctx, p, t) {
+    var flick = 0.55 + 0.45 * Math.sin(p.ph * 2.3);
+    ctx.globalAlpha = clamp01(t * flick);
+    ctx.fillStyle = t > 0.5 ? p.col2 : p.col;
+    rect(ctx, p.x - p.s * 0.5, p.y - p.s * 0.5, p.s, p.s, p.grid);
   }
 
   function drawStone(ctx, p, t) {

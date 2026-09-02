@@ -291,7 +291,31 @@ function say(text, x, y, color, dur) {
   anim.words.push({ text: text, x: x, y: y, t: 0, dur: dur || 0.75, color: color || THEME.fx.flash });
 }
 function shake(p) { if (!G.reduced) FX.shakeImpulse(p); }
-function sfx(n) { SFX.play(n); }
+
+/* Cada sonido sale de la columna donde ocurre: el combate se oye a la
+   izquierda o a la derecha segun donde este la casilla. */
+function panOfCol(sc) {
+  const c = flip ? 7 - sc : sc;
+  return clamp(((c - 3.5) / 3.5) * 0.6, -0.6, 0.6);
+}
+function sfx(n, o) {
+  const opts = o ? Object.assign({}, o) : {};
+  if (opts.pan == null && anim && typeof anim.panSc === 'number') opts.pan = panOfCol(anim.panSc);
+  SFX.play(n, opts);
+}
+/* Tono de la carga de poder: grave para el golem, agudo para el hechicero. */
+const PITCH = { p: 1.0, n: 0.8, b: 1.35, r: 0.5, q: 1.15, k: 0.9 };
+
+/* Golpe con peso: la animacion se congela unos milisegundos en el impacto y
+   la camara da un pequeno tiron de zoom hacia el punto del golpe. */
+function hitStop(sec) { if (anim && !G.reduced) anim.stop = Math.max(anim.stop || 0, sec); }
+function punch(x, y, k) {
+  if (!anim || G.reduced) return;
+  anim.punch = { x: x, y: y, k: Math.min(1, Math.max(anim.punch ? anim.punch.k : 0, k)) };
+  if (view3d && R3.ready()) { try { R3.punch(k); } catch (e) { } }
+}
+/* Estela: el actor deja copias translucidas de si mismo mientras carga. */
+function ghostOn(a, on) { a.ghost = !!on; if (!on) return; if (!a.ghosts) a.ghosts = []; }
 
 /* ============ PODERES: cada pieza tiene el suyo, con su nombre ============ */
 const POWER = {
@@ -329,9 +353,10 @@ function battleActs(A, D, ctxb) {
     d: 0.42,
     enter: function () {
       A.frame = 'attack';
-      sfx('select');
+      sfx('charge', { pitch: PITCH[A.t] || 1 });
       const c = bodyPoint(A.sr, A.sc, 0.5, 0);
       FX.emit('impact', c.x, c.y, { scale: c.k * 5, color: POWER[A.t].color });
+      FX.emit('ring', c.x, c.y + c.k * 14, { scale: c.k * 0.5, color: POWER[A.t].color, flat: 0.35, life: 0.6 });
     },
     tick: function (u) {
       A.lift = 1.2 * Math.sin(Math.PI * u);
@@ -347,7 +372,7 @@ function battleActs(A, D, ctxb) {
   function thrust(power, word, dur) {
     const a = {
       d: dur || 0.30,
-      enter: function () { A.frame = 'attack'; sfx('slash'); },
+      enter: function () { A.frame = 'attack'; sfx('whoosh', { pitch: 0.9 + 0.2 * power }); ghostOn(A, power >= 1.4); },
       tick: function (u) {
         toward(0.42 * Math.sin(Math.PI * u) * power);
         if (u > 0.42 && u < 0.75) {
@@ -356,6 +381,8 @@ function battleActs(A, D, ctxb) {
             FX.emit('slash', c.x, c.y, { dir: dirAng, scale: c.k * 6 * power, color: THEME.fx.spark });
             FX.emit('sparks', c.x, c.y, { n: 16, color: THEME.fx.spark, color2: THEME.fx.spark2 });
             FX.emit('impact', c.x, c.y, { scale: c.k * 5 * power });
+            if (power >= 1.4) { FX.emit('ring', c.x, c.y, { scale: c.k * 0.7, color: THEME.fx.spark2, flat: 0.8 }); punch(c.x, c.y, 0.5); }
+            hitStop(power >= 1.4 ? 0.09 : 0.04);
             shake(5 * power); sfx('clash');
             D.lean = 0.10 * power * (ux > 0 ? 1 : -1);
             if (word) say(word, c.x, c.y - c.k * 8, THEME.fx.spark, 0.9);
@@ -363,7 +390,7 @@ function battleActs(A, D, ctxb) {
         }
         D.sc = ctxb.d0.sc + ux * 0.10 * power * Math.sin(Math.PI * clamp((u - 0.4) / 0.6, 0, 1));
       },
-      exit: function () { A.frame = 'idle'; toward(0); D.sc = ctxb.d0.sc; D.lean = 0; }
+      exit: function () { A.frame = 'idle'; toward(0); D.sc = ctxb.d0.sc; D.lean = 0; ghostOn(A, false); }
     };
     return a;
   }
@@ -391,7 +418,11 @@ function battleActs(A, D, ctxb) {
     /* TORRE — Terremoto: alza los punos, la tierra tiembla y dos mazazos. */
     const alza = {
       d: 0.45,
-      enter: function () { A.frame = 'attack'; sfx('stone'); },
+      enter: function () {
+        A.frame = 'attack'; sfx('rumble');
+        const f = feet();
+        FX.emit('crack', f.x, f.y, { n: 4, scale: f.k * 0.5, power: 0.8 });
+      },
       tick: function (u) {
         A.lift = 8 * easeOut(u);
         A.squash = 1 + 0.06 * u;
@@ -399,6 +430,7 @@ function battleActs(A, D, ctxb) {
           const f = feet();
           const ang = Math.random() * Math.PI * 2, r = f.k * (6 + Math.random() * 14);
           FX.emit('dust', f.x + Math.cos(ang) * r, f.y + Math.sin(ang) * r * 0.4, { n: 2 });
+          if (Math.random() < 0.3) FX.emit('stone', f.x + Math.cos(ang) * r, f.y + Math.sin(ang) * r * 0.4, { n: 1, power: 0.35 });
         }
         if (u > 0.4) shake(2);
       }
@@ -415,9 +447,13 @@ function battleActs(A, D, ctxb) {
             const c = feet();
             FX.emit('impact', c.x, c.y, { scale: c.k * (12 + g * 5) });
             FX.emit('impact', c.x, c.y, { scale: c.k * (7 + g * 4), color: THEME.fx.stone });
+            FX.emit('ring', c.x, c.y, { scale: c.k * (1.4 + g * 0.6), color: THEME.fx.stone, color2: '#fff3c4', flat: 0.42, width: 4, life: 0.55 });
+            FX.emit('crack', c.x, c.y, { n: 6 + g * 2, scale: c.k * 0.8, power: 1 + g * 0.5 });
             FX.emit('stone', c.x, c.y, { n: 26, color: THEME.fx.stone });
             FX.emit('dust', c.x, c.y, { n: 20 });
-            shake(13 + g * 4); sfx('stone');
+            FX.emit('ember', c.x, c.y, { n: 8, color: THEME.fx.spark2 });
+            hitStop(0.08 + g * 0.05); punch(c.x, c.y, 0.7 + g * 0.3);
+            shake(13 + g * 4); sfx('stone', { pitch: g ? 0.85 : 1 });
             say(g ? '¡CRASH!' : '¡PUM!', c.x, c.y - c.k * 18, THEME.fx.stone, 0.9);
             D.squash = 0.72 - g * 0.06;
             D.lift = 0;
@@ -434,7 +470,7 @@ function battleActs(A, D, ctxb) {
     /* CABALLO — Carga de caballeria: retrocede, embiste y vuelve a pasar. */
     push({
       d: 0.34,
-      enter: function () { A.frame = 'attack'; sfx('move'); },
+      enter: function () { A.frame = 'attack'; sfx('gallop', { pitch: 1.1 }); },
       tick: function (u) {
         A.sr = stand.sr + uy * 0.45 * easeOut(u);
         A.sc = stand.sc + ux * 0.45 * easeOut(u);
@@ -444,7 +480,7 @@ function battleActs(A, D, ctxb) {
     for (let p = 0; p < 2; p++) {
       const carga = {
         d: 0.52,
-        enter: function () { A.frame = 'attack'; sfx('slash'); },
+        enter: function () { A.frame = 'attack'; sfx('gallop'); sfx('whoosh', { delay: 0.12, pitch: 0.8 }); ghostOn(A, true); },
         tick: function (u) {
           const q = easeInOut(u);
           const desde = p === 0 ? 0.45 : -0.85;
@@ -461,13 +497,15 @@ function battleActs(A, D, ctxb) {
             FX.emit('slash', c.x, c.y, { dir: dirAng + (p ? 0.5 : -0.5), scale: c.k * 8, color: THEME.fx.spark });
             FX.emit('sparks', c.x, c.y, { n: 20, color: gold, color2: THEME.fx.spark2 });
             FX.emit('dust', c.x, c.y, { n: 16 });
+            FX.emit('ring', c.x, c.y + c.k * 10, { scale: c.k * (0.9 + p * 0.4), color: '#d8cfb4', color2: gold, flat: 0.4 });
+            hitStop(0.06 + p * 0.04); punch(c.x, c.y, 0.5 + p * 0.3);
             shake(11 + p * 3); sfx('clash');
             say(p ? '¡PLAF!' : '¡PUM!', c.x, c.y - c.k * 10, gold, 0.9);
             D.lean = (0.22 + p * 0.16) * (ux > 0 ? 1 : -1);
             D.squash = 0.92 - p * 0.06;
           });
         },
-        exit: function () { A.lift = 0; }
+        exit: function () { A.lift = 0; ghostOn(A, false); }
       };
       push(carga);
       if (!p) push({ d: 0.16, tick: function () { } });
@@ -479,7 +517,7 @@ function battleActs(A, D, ctxb) {
     /* ALFIL — Rayo arcano: circulo de runas, canalizacion y rayo encadenado. */
     const circulo = {
       d: 0.55,
-      enter: function () { A.frame = 'attack'; sfx('magic'); },
+      enter: function () { A.frame = 'attack'; sfx('charge', { pitch: 1.35 }); sfx('sparkle', { delay: 0.2 }); },
       tick: function (u) {
         const w = weapon(1.02);
         /* runas girando alrededor de la gema */
@@ -490,8 +528,10 @@ function battleActs(A, D, ctxb) {
           FX.emit('magic', w.x + Math.cos(ang) * r, w.y + Math.sin(ang) * r * 0.6,
             { n: 1, color: glow, scale: w.k });
         }
+        if (Math.random() < 0.25) sfx('sparkle');
         if (u > 0.75) once(circulo, 'carga', function () {
           FX.emit('impact', w.x, w.y, { scale: w.k * 6, color: glow });
+          FX.emit('ring', w.x, w.y, { scale: w.k * 0.6, color: glow, flat: 1, life: 0.35 });
         });
       }
     };
@@ -503,13 +543,15 @@ function battleActs(A, D, ctxb) {
           if (u > 0.05) once(rayo, 'bolt', function () {
             const w = weapon(1.02), c = chest();
             FX.emit('bolt', w.x, w.y, { x2: c.x, y2: c.y, color: glow });
-            sfx('magic');
+            sfx('zap', { pitch: 1 + z * 0.15 });
           });
           if (u > 0.35) once(rayo, 'hit', function () {
             const c = chest();
             FX.emit('magic', c.x, c.y, { n: 18 + z * 8, color: glow, scale: c.k });
             FX.emit('impact', c.x, c.y, { scale: c.k * (6 + z * 3), color: glow });
+            FX.emit('ring', c.x, c.y, { scale: c.k * (0.6 + z * 0.3), color: glow, color2: THEME.fx.flash, flat: 1, life: 0.3 });
             FX.emit('sparks', c.x, c.y, { n: 8, color: glow, color2: THEME.fx.flash });
+            hitStop(0.05); punch(c.x, c.y, 0.35);
             shake(5 + z * 3);
             if (z === 1) say('¡FZZZT!', c.x, c.y - c.k * 12, glow, 1.0);
             D.white = true;
@@ -525,7 +567,7 @@ function battleActs(A, D, ctxb) {
     /* REINA — Tormenta arcana: se eleva, invoca proyectiles y estalla. */
     const sube = {
       d: 0.50,
-      enter: function () { A.frame = 'attack'; sfx('magic'); },
+      enter: function () { A.frame = 'attack'; sfx('charge', { pitch: 1.15 }); sfx('magic', { delay: 0.25 }); },
       tick: function (u) {
         A.lift = 10 * easeOut(u);
         const w = weapon(0.95);
@@ -543,11 +585,12 @@ function battleActs(A, D, ctxb) {
         /* proyectiles que caen del cielo sobre el defensor */
         if (Math.random() < 0.55) {
           const dx = (Math.random() - 0.5) * c.k * 26;
-          FX.emit('bolt', c.x + dx, c.y - c.k * 40, { x2: c.x + dx * 0.3, y2: c.y, color: glow });
+          FX.emit('bolt', c.x + dx, c.y - c.k * 40, { x2: c.x + dx * 0.3, y2: c.y, color: glow, branches: 1 });
           FX.emit('magic', c.x + dx * 0.3, c.y, { n: 5, color: glow, scale: c.k });
           FX.emit('impact', c.x + dx * 0.3, c.y, { scale: c.k * 3, color: glow });
+          FX.emit('ring', c.x + dx * 0.3, c.y + c.k * 2, { scale: c.k * 0.35, color: glow, flat: 0.5, life: 0.28 });
           shake(3);
-          sfx('magic');
+          sfx('zap', { pitch: 0.9 + Math.random() * 0.4 });
         }
         if (u > 0.2) D.white = (Math.floor(u * 14) % 2) === 0 && !G.reduced;
       },
@@ -563,11 +606,15 @@ function battleActs(A, D, ctxb) {
           FX.emit('bolt', w.x, w.y, { x2: c.x, y2: c.y, color: glow });
           FX.emit('impact', c.x, c.y, { scale: c.k * 14, color: glow });
           FX.emit('impact', c.x, c.y, { scale: c.k * 9, color: THEME.fx.flash });
+          FX.emit('ring', c.x, c.y, { scale: c.k * 2.2, color: glow, color2: THEME.fx.flash, flat: 0.55, width: 4, life: 0.6 });
+          FX.emit('ring', c.x, c.y, { scale: c.k * 1.3, color: THEME.fx.flash, color2: glow, flat: 1, life: 0.4 });
           FX.emit('magic', c.x, c.y, { n: 40, color: glow, scale: c.k });
           FX.emit('sparks', c.x, c.y, { n: 20, color: glow, color2: THEME.fx.flash });
-          shake(13); sfx('capture');
+          FX.emit('ember', c.x, c.y, { n: 14, color: glow, color2: THEME.fx.flash });
+          hitStop(0.12); punch(c.x, c.y, 1);
+          shake(13); sfx('thunder'); sfx('capture', { delay: 0.03 });
           say('¡FLASH!', c.x, c.y - c.k * 14, glow, 1.1);
-          if (!G.reduced) anim.flash = 0.55;
+          if (!G.reduced) { anim.flash = 0.55; anim.flashColor = glow; }
           D.white = true;
         });
       },
@@ -581,7 +628,7 @@ function battleActs(A, D, ctxb) {
     for (let i = 0; i < 5; i++) {
       const choque = {
         d: 0.24,
-        enter: function () { A.frame = 'attack'; D.frame = 'attack'; },
+        enter: function () { A.frame = 'attack'; D.frame = 'attack'; if (i === 0) sfx('fanfare'); sfx('whoosh', { pitch: 1 + i * 0.05 }); },
         tick: function (u) {
           const q = Math.sin(Math.PI * u);
           toward(0.30 * q);
@@ -591,7 +638,9 @@ function battleActs(A, D, ctxb) {
             const mx = bodyPoint((A.sr + D.sr) / 2, (A.sc + D.sc) / 2, 0.62, 0);
             FX.emit('sparks', mx.x, mx.y, { n: 14 + i * 3, color: THEME.fx.spark, color2: THEME.fx.spark2 });
             FX.emit('slash', mx.x, mx.y, { dir: dirAng + (i % 2 ? 0.7 : -0.7), scale: mx.k * 6, color: THEME.fx.spark2 });
-            shake(5 + i); sfx('clash');
+            if (i >= 3) FX.emit('ring', mx.x, mx.y, { scale: mx.k * 0.5, color: THEME.fx.spark, flat: 1, life: 0.25 });
+            hitStop(0.03 + i * 0.01);
+            shake(5 + i); sfx('clash', { pitch: 0.9 + i * 0.06 });
             if (i === 2) say('¡CLANG!', mx.x, mx.y - mx.k * 9, THEME.fx.spark, 0.9);
           });
         },
@@ -634,19 +683,21 @@ function battleActs(A, D, ctxb) {
     push(nube);
     const tajo = {
       d: 0.40,
-      enter: function () { A.frame = 'attack'; },
+      enter: function () { A.frame = 'attack'; sfx('whoosh', { pitch: 0.7 }); ghostOn(A, true); },
       tick: function (u) {
         toward(0.34 * Math.sin(Math.PI * u));
         if (u > 0.4) once(tajo, 'final', function () {
           const c = chest();
           FX.emit('slash', c.x, c.y, { dir: dirAng, scale: c.k * 10, color: gold });
           FX.emit('impact', c.x, c.y, { scale: c.k * 10, color: gold });
+          FX.emit('ring', c.x, c.y, { scale: c.k * 1.6, color: gold, color2: THEME.fx.flash, flat: 0.7, width: 4, life: 0.5 });
           FX.emit('sparks', c.x, c.y, { n: 22, color: gold, color2: THEME.fx.flash });
-          shake(12); sfx('capture');
+          hitStop(0.11); punch(c.x, c.y, 0.9);
+          shake(12); sfx('clash', { pitch: 0.8 }); sfx('capture', { delay: 0.02 });
           say('¡RAS!', c.x, c.y - c.k * 12, gold, 1.0);
         });
       },
-      exit: function () { toward(0); A.frame = 'idle'; }
+      exit: function () { toward(0); A.frame = 'idle'; ghostOn(A, false); }
     };
     push(tajo);
   }
@@ -675,6 +726,7 @@ function walkAct(actor, a0, a1, dur, arc, silent) {
       actor.sr = a1.sr; actor.sc = a1.sc; actor.lift = 0; actor.frame = 'idle';
       const b = bodyPoint(a1.sr, a1.sc, 0.02, 0);
       FX.emit('dust', b.x, b.y, { n: 5 });
+      if (arc) FX.emit('ring', b.x, b.y, { scale: b.k * 0.45, color: '#d8cfb4', flat: 0.4, life: 0.3, width: 2 });
       if (!silent) sfx('land');
     }
   };
@@ -688,10 +740,11 @@ function disintegrateAct(D, A) {
   const a = {
     d: 1.15 * BATTLE_STRETCH,
     enter: function () {
-      sfx('magic');
+      sfx('disintegrate');
       A.frame = 'attack';
       const c = bodyPoint(D.sr, D.sc, 0.5, 0);
       FX.emit('impact', c.x, c.y, { scale: c.k * 8, color: glow });
+      FX.emit('ring', c.x, c.y, { scale: c.k * 0.9, color: glow, flat: 1, life: 0.45 });
       say('¡DESINTEGRADO!', c.x, c.y - c.k * 14, glow, 1.3);
     },
     tick: function (u) {
@@ -711,10 +764,14 @@ function disintegrateAct(D, A) {
       while (consumido < filaObj) {
         const y1 = spr.h - consumido, y0 = Math.max(0, y1 - 2);
         const motas = spritePixelsScreen(D, y0, y1);
+        const w = bodyPoint(A.sr, A.sc, 1.02, (A.flipX ? -9 : 9));   // la gema de la vara
         for (let i = 0; i < motas.length; i += 2) {
           const m = motas[i];
-          FX.emit('magic', m.x, m.y, { n: 1, color: Math.random() < 0.45 ? glow : m.color, scale: m.size });
+          /* la mitad sale volando como magia; la otra mitad la absorbe la vara */
+          if (i % 4 === 0) FX.emit('vortex', m.x, m.y, { n: 1, x2: w.x, y2: w.y, color: m.color, color2: glow, pixel: m.size });
+          else FX.emit('magic', m.x, m.y, { n: 1, color: Math.random() < 0.45 ? glow : m.color, scale: m.size });
         }
+        if (Math.random() < 0.35) sfx('sparkle');
         consumido += 2;
       }
       if (u > 0.6 && Math.random() < 0.25) {
@@ -727,8 +784,11 @@ function disintegrateAct(D, A) {
       const c = bodyPoint(D.sr, D.sc, 0.45, 0);
       FX.emit('magic', c.x, c.y, { n: 28, color: glow, scale: c.k });
       FX.emit('impact', c.x, c.y, { scale: c.k * 10, color: glow });
+      FX.emit('ring', c.x, c.y, { scale: c.k * 1.4, color: glow, color2: THEME.fx.flash, flat: 1, life: 0.5 });
       FX.emit('stars', c.x, c.y, { n: 6 });
-      shake(6); sfx('death');
+      const w = bodyPoint(A.sr, A.sc, 1.02, (A.flipX ? -9 : 9));
+      FX.emit('impact', w.x, w.y, { scale: w.k * 5, color: glow });
+      shake(6); sfx('death'); sfx('zap', { delay: 0.05, pitch: 1.4 });
     }
   };
   return a;
@@ -754,6 +814,7 @@ function deathAct(D) {
           const c = bodyPoint(D.sr, D.sc, 0.5, 0);
           FX.emit('pixelBurst', c.x, c.y, { sprite: px });
           FX.emit('smoke', c.x, c.y, { n: 10 });
+          FX.emit('ring', c.x, c.y + c.k * 12, { scale: c.k * 1.1, color: '#d8cfb4', color2: THEME.fx.spark, flat: 0.4, life: 0.5 });
           FX.emit('stars', c.x, c.y - c.k * 6, { n: 6 });
           D.hidden = true; sfx('death'); shake(6);
         });
@@ -791,8 +852,9 @@ function promoAct(A, promo) {
 function buildAnim(move, next, san) {
   anim = {
     move: move, next: next, san: san, actors: [], hide: new Set([move.from]),
-    words: [], cloud: null, flash: 0, rt: 0, seq: null,
-    spot: 0, spotTarget: 0, spotAt: null, powerLabel: null, powerBy: ''
+    words: [], cloud: null, flash: 0, flashColor: null, rt: 0, seq: null,
+    spot: 0, spotTarget: 0, spotAt: null, powerLabel: null, powerBy: '',
+    stop: 0, punch: null, panSc: idxToRC(move.cap ? move.cap.sq : move.to).sc
   };
   const A = mkActor(move.from, move.t, move.c);
   anim.actors.push(A);
@@ -865,10 +927,10 @@ function buildAnim(move, next, san) {
         /* Cada pieza anuncia su propio poder antes de emplearlo. */
         const pw = POWER[move.t];
         if (pw) {
-          anim.powerLabel = { text: pw.name, color: pw.color, t: 0, dur: 1.5 };
+          anim.powerLabel = { text: pw.name, color: pw.color, t: 0, dur: 1.5, t2: move.t, c: move.c };
           anim.powerBy = PIECE_NAME[move.t].toUpperCase();
         }
-        sfx('check');
+        sfx('horn', { pitch: 1.3 });
       },
       tick: function (u) { D.lean = 0.05 * Math.sin(u * 22) * (ux > 0 ? 1 : -1); },
       exit: function () { D.lean = 0; }
@@ -892,7 +954,8 @@ function buildAnim(move, next, san) {
         A.sr = to.sr; A.sc = to.sc; A.frame = 'idle';
         const b = bodyPoint(to.sr, to.sc, 0.02, 0);
         FX.emit('dust', b.x, b.y, { n: 6 });
-        sfx('capture');
+        FX.emit('ring', b.x, b.y, { scale: b.k * 0.5, color: '#d8cfb4', flat: 0.4, life: 0.3, width: 2 });
+        sfx('land');
       }
     });
   }
@@ -1269,6 +1332,12 @@ function collectRenderables(time) {
   if (anim) {
     for (const a of anim.actors) {
       if (a.hidden) continue;
+      if (a.ghosts) for (const gh of a.ghosts) {
+        list.push({
+          sr: gh.sr - 0.001, sc: gh.sc, t: a.t, c: a.c, lift: gh.lift, sh: 0, ghost: true,
+          o: { frame: gh.frame, flipX: gh.flipX, lift: gh.lift, alpha: gh.a * 0.6 }
+        });
+      }
       list.push({
         sr: a.sr, sc: a.sc, t: a.t, c: a.c, lift: a.lift, sh: a.t === 'r' ? 1.15 : 1,
         o: { frame: a.frame, flipX: a.flipX, lift: a.lift, alpha: a.alpha, white: a.white, squash: a.squash, lean: a.lean, scale: a.scale, erode: a.erode }
@@ -1314,6 +1383,9 @@ function buildScene3d(time) {
     for (const a of anim.actors) {
       if (a.hidden) continue;
       const otro = (a === A && D && !D.hidden) ? D : (a === D ? A : null);
+      if (a.ghosts) for (const gh of a.ghosts) {
+        pieces.push({ t: a.t, c: a.c, sr: gh.sr, sc: gh.sc, lift: gh.lift, alpha: gh.a * 0.5, facing: facingTo(a, otro) });
+      }
       pieces.push({
         t: a.t, c: a.c, sr: a.sr, sc: a.sc,
         lift: a.lift, squash: a.squash, scale: a.scale, lean: a.lean,
@@ -1405,12 +1477,19 @@ function render(time) {
   const sh = FX.shake || { x: 0, y: 0 };
   g.save();
   g.translate(sh.x || 0, sh.y || 0);
+  if (anim && anim.punch && anim.punch.k > 0.01) {
+    /* zoom breve hacia el punto del golpe */
+    const z = 1 + 0.045 * anim.punch.k;
+    g.translate(anim.punch.x, anim.punch.y);
+    g.scale(z, z);
+    g.translate(-anim.punch.x, -anim.punch.y);
+  }
 
   g.drawImage(boardCv, 0, 0, L.w, L.h);
   drawHighlights(g, time);
 
   const list = collectRenderables(time);
-  for (const it of list) drawShadow(g, it.sr, it.sc, it.lift, 0.40, it.sh);
+  for (const it of list) if (!it.ghost) drawShadow(g, it.sr, it.sc, it.lift, 0.40, it.sh);
   for (const it of list) drawSprite(g, it.t, it.c, it.sr, it.sc, it.o);
 
   /* foco dramatico: se oscurece el tablero y los duelistas se vuelven a pintar */
@@ -1427,6 +1506,9 @@ function render(time) {
     anim.drawOrder = duel.map(function (a) { return a.sr; });   // invariante comprobable
     for (const a of duel) drawShadow(g, a.sr, a.sc, a.lift, 0.40, a.t === 'r' ? 1.15 : 1);
     for (const a of duel) {
+      if (a.ghosts) for (const gh of a.ghosts) {
+        drawSprite(g, a.t, a.c, gh.sr, gh.sc, { frame: gh.frame, flipX: gh.flipX, lift: gh.lift, alpha: gh.a * 0.6 });
+      }
       drawSprite(g, a.t, a.c, a.sr, a.sc, {
         frame: a.frame, flipX: a.flipX, lift: a.lift, alpha: a.alpha,
         white: a.white, squash: a.squash, lean: a.lean, scale: a.scale, erode: a.erode
@@ -1457,6 +1539,30 @@ function drawPowerLabel(g) {
     const u = clamp(pl.t / pl.dur, 0, 1);
     const y = L.h * 0.13;
     try {
+      /* banda oscura que entra por la izquierda, con el filo del color del poder */
+      const enter = easeOut(clamp(u / 0.18, 0, 1));
+      const leave = u > 0.8 ? 1 - (u - 0.8) / 0.2 : 1;
+      const bh = Math.max(34, L.h * 0.11);
+      g.save();
+      g.globalAlpha = 0.62 * leave;
+      g.fillStyle = 'rgba(8,6,12,1)';
+      g.fillRect(0, y - bh * 0.5, L.w * enter, bh);
+      g.globalAlpha = 0.9 * leave;
+      g.fillStyle = pl.color;
+      g.fillRect(0, y - bh * 0.5, L.w * enter, 2);
+      g.fillRect(0, y + bh * 0.5 - 2, L.w * enter, 2);
+      /* retrato pixelado del atacante, en pose de ataque */
+      const img = pl.t2 && SHEET[pl.t2 + pl.c + 'attack'];
+      if (img && enter > 0.5) {
+        const spr = SPR[pl.t2];
+        const k = Math.max(1, Math.floor((bh - 6) / spr.h));
+        const px = Math.round(L.w * 0.5 - Math.max(120, L.w * 0.22)) - spr.w * k;
+        g.globalAlpha = clamp((enter - 0.5) * 2, 0, 1) * leave;
+        g.imageSmoothingEnabled = false;
+        g.drawImage(img, px, Math.round(y - spr.h * k * 0.5), spr.w * k, spr.h * k);
+        g.imageSmoothingEnabled = true;
+      }
+      g.restore();
       FX.drawComicWord(g, L.cx, y, pl.text, u, pl.color);
       if (anim.powerBy) {
         g.save();
@@ -1479,7 +1585,7 @@ function drawPowerLabel(g) {
    sacudida, y son comunes a las dos vistas. */
 function drawOverlays(g) {
   if (anim && anim.flash > 0.01) {
-    try { FX.drawFlash(g, L.w, L.h, anim.flash * 0.55, THEME.fx.flash); } catch (e) { }
+    try { FX.drawFlash(g, L.w, L.h, anim.flash * 0.55, anim.flashColor || THEME.fx.flash); } catch (e) { }
   }
   if (vigCv) g.drawImage(vigCv, 0, 0, L.w, L.h);
 }
@@ -1514,7 +1620,11 @@ function syncUI() {
   if (!UI.turn) return;
   const t = G.state.turn;
   UI.turn.textContent = t === 'w' ? 'TURNO BLANCO' : 'TURNO NEGRO';
-  UI.turn.className = 'badge ' + (t === 'w' ? 'w' : 'b');
+  /* se tocan solo las clases del bando: asi el latido no se corta si syncUI
+     vuelve a llamarse a mitad de la animacion */
+  UI.turn.classList.add('badge');
+  UI.turn.classList.remove(t === 'w' ? 'b' : 'w');
+  UI.turn.classList.add(t === 'w' ? 'w' : 'b');
 
   let st = '';
   if (G.over) st = G.over.result === 'checkmate' ? 'Partida terminada — mate' : 'Partida terminada — tablas';
@@ -1539,16 +1649,44 @@ function syncUI() {
   for (let i = 0; i < G.log.length; i += 2) {
     const li = document.createElement('li');
     const n = document.createElement('span'); n.className = 'num'; n.textContent = (i / 2 + 1) + '.';
-    const a = document.createElement('span'); a.className = 'san w'; a.textContent = G.log[i] || '';
-    const b = document.createElement('span'); b.className = 'san b'; b.textContent = G.log[i + 1] || '';
+    const a = document.createElement('span'); a.className = 'san w' + sanClass(G.log[i]); a.textContent = G.log[i] || '';
+    const b = document.createElement('span'); b.className = 'san b' + sanClass(G.log[i + 1]); b.textContent = G.log[i + 1] || '';
+    if (i + 2 >= G.log.length) li.className = 'last';
     li.appendChild(n); li.appendChild(a); li.appendChild(b);
     UI.moves.appendChild(li);
+  }
+  /* el distintivo del turno late cuando cambia de bando */
+  if (UI.turn && lastTurnShown !== t) {
+    lastTurnShown = t;
+    UI.turn.classList.remove('pulse');
+    void UI.turn.offsetWidth;
+    UI.turn.classList.add('pulse');
+  }
+  if (UI.vs) {
+    if (G.busy && anim && anim.move && anim.move.cap) {
+      const mv = anim.move;
+      UI.vs.textContent = nombreBando(mv.t, mv.c) + ' \u2694 ' + nombreBando(mv.cap.t, mv.cap.c);
+    } else UI.vs.textContent = '';
   }
   UI.moves.scrollTop = UI.moves.scrollHeight;
   UI.undo.disabled = !G.stack.length || G.busy;
   if (UI.flip) UI.flip.disabled = G.busy;
   if (UI.view) UI.view.disabled = G.busy || !R3.ready();
   UI.hint.style.display = (G.busy && anim && anim.move && anim.move.cap) ? 'block' : 'none';
+}
+
+let lastTurnShown = '';
+/* "Reina blanca" pero "Golem blanco": el adjetivo concuerda con la pieza. */
+function nombreBando(t, c) {
+  const fem = t === 'q';
+  return PIECE_NAME[t] + ' ' + (c === 'w' ? (fem ? 'blanca' : 'blanco') : (fem ? 'negra' : 'negro'));
+}
+function sanClass(san) {
+  if (!san) return '';
+  let k = '';
+  if (san.indexOf('x') >= 0) k += ' cap';
+  if (san.indexOf('#') >= 0) k += ' mate'; else if (san.indexOf('+') >= 0) k += ' chk';
+  return k;
 }
 
 function showBanner(text, sub, tone) {
@@ -1648,11 +1786,19 @@ function bindInput() {
     syncUI();
   });
   cv.addEventListener('pointermove', function (ev) {
-    if (G.busy || G.over) { G.hover = -1; return; }
+    if (G.busy || G.over) { G.hover = -1; cv.style.cursor = G.busy ? 'pointer' : ''; return; }
     const p = canvasPoint(ev);
     G.hover = pickSquare(p.x, p.y);
+    /* la mano solo aparece donde el clic hace algo: pieza propia o destino */
+    let mano = false;
+    if (G.hover >= 0 && !isAI(G.state.turn)) {
+      const pc = G.state.b[G.hover];
+      if (pc && pc.c === G.state.turn) mano = true;
+      else if (G.sel >= 0 && G.targets.some(function (m) { return m.to === G.hover; })) mano = true;
+    }
+    cv.style.cursor = mano ? 'pointer' : '';
   });
-  cv.addEventListener('pointerleave', function () { G.hover = -1; });
+  cv.addEventListener('pointerleave', function () { G.hover = -1; cv.style.cursor = ''; });
   window.addEventListener('keydown', function (ev) {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const tag = ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '';
@@ -1672,11 +1818,11 @@ function bindInput() {
     if (typing) return;
     armSound();
     if (k === 'u') undo();
-    else if (k === 'n') { hideBanner(); newGame(); }
+    else if (k === 'n') { hideBanner(); newGame(); sfx('horn'); }
     else if (k === 'f') toggleFlip();
     else if (k === 'm') { UI.sound.click(); }
-    else if (k === 'v') setView(view3d ? '2d' : '3d');
-    else if (k === 'c') cycleCam();
+    else if (k === 'v') { if (setView(view3d ? '2d' : '3d')) sfx('swoosh'); }
+    else if (k === 'c') { cycleCam(); if (view3d) sfx('swoosh', { pitch: 1.2 }); }
     else return;
     syncUI();
   });
@@ -1685,15 +1831,35 @@ function bindInput() {
 /* ================================ BUCLE ================================ */
 let lastT = 0;
 function update(dt) {
-  const sdt = dt * G.timeScale;
+  let sdt = dt * G.timeScale;
   if (anim) {
     anim.rt += dt;
-    try { seqUpdate(anim.seq, sdt); } catch (e) { forceFinish(); }
+    /* hit-stop: el guion se congela unos milisegundos tras un golpe fuerte;
+       el reloj real (rt) sigue, asi que el vigilante no se ve afectado */
+    if (anim.stop > 0) { anim.stop -= dt; sdt = 0; }
+    if (sdt > 0) { try { seqUpdate(anim.seq, sdt); } catch (e) { forceFinish(); } }
     if (anim) {
       if (anim.rt > 16) forceFinish();
       else {
         anim.flash = Math.max(0, anim.flash - dt * 2.4);
         anim.spot += (anim.spotTarget - anim.spot) * Math.min(1, dt * 5.5);
+        if (anim.punch) {
+          anim.punch.k -= dt * 6;
+          if (anim.punch.k <= 0) anim.punch = null;
+        }
+        /* estelas: instantanea por fotograma mientras el actor carga */
+        for (const a of anim.actors) {
+          if (a.ghosts) {
+            for (let i = a.ghosts.length - 1; i >= 0; i--) {
+              a.ghosts[i].a -= dt * 5.5;
+              if (a.ghosts[i].a <= 0) a.ghosts.splice(i, 1);
+            }
+            if (a.ghost && !a.hidden && sdt > 0 && !G.reduced) {
+              a.ghosts.push({ sr: a.sr, sc: a.sc, lift: a.lift, frame: a.frame, flipX: a.flipX, a: 0.55 });
+              if (a.ghosts.length > 7) a.ghosts.shift();
+            }
+          }
+        }
         if (anim.powerLabel) {
           anim.powerLabel.t += sdt;
           if (anim.powerLabel.t >= anim.powerLabel.dur) anim.powerLabel = null;
@@ -1778,7 +1944,8 @@ function init() {
     material: $('material'), moves: $('moves'), undo: $('undo'),
     banner: $('banner'), bannerT: $('bannerT'), bannerS: $('bannerS'),
     promo: $('promo'), promoRow: $('promoRow'), sound: $('sound'), hint: $('hint'),
-    flip: $('flip'), view: $('view'), cam: $('cam'), camWrap: $('camWrap')
+    flip: $('flip'), view: $('view'), cam: $('cam'), camWrap: $('camWrap'),
+    vol: $('vol'), vs: $('vs')
   };
   G.reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   /* Con movimiento reducido no se acelera el combate: se suprime. El usuario
@@ -1804,21 +1971,46 @@ function init() {
     try { new ResizeObserver(resize).observe(cv.parentElement); } catch (e) { }
   }
 
-  $('new').onclick = function () { armSound(); hideBanner(); newGame(); };
-  UI.undo.onclick = function () { armSound(); hideBanner(); undo(); };
-  $('flip').onclick = function () { armSound(); toggleFlip(); };
+  $('new').onclick = function () { armSound(); hideBanner(); newGame(); sfx('horn'); };
+  UI.undo.onclick = function () { armSound(); hideBanner(); if (!G.busy && G.stack.length) sfx('undo'); undo(); };
+  $('flip').onclick = function () { armSound(); if (!G.busy) sfx('swoosh', { pitch: 0.8 }); toggleFlip(); };
   if (UI.view) {
     UI.view.onchange = function (e) {
       armSound();
       if (!setView(e.target.value)) e.target.value = view3d ? '3d' : '2d';
+      else sfx('swoosh');
     };
     UI.view.value = '2d';
   }
   if (UI.cam) {
-    UI.cam.onchange = function (e) { armSound(); setCam(e.target.value); };
+    UI.cam.onchange = function (e) { armSound(); setCam(e.target.value); sfx('swoosh', { pitch: 1.2 }); };
     UI.cam.value = R3.ready() ? R3.getCamera() : 'clasica';
   }
-  $('mode').onchange = function (e) { armSound(); G.mode = e.target.value; hideBanner(); newGame(); };
+  /* volumen: control deslizante que se recuerda entre partidas */
+  if (UI.vol) {
+    const guardado = leerAjuste('vol');
+    if (guardado !== null) {
+      const v = clamp(parseInt(guardado, 10) / 100, 0, 1);
+      if (isFinite(v)) { SFX.setVolume(v); UI.vol.value = String(Math.round(v * 100)); }
+    } else UI.vol.value = String(Math.round(SFX.getVolume() * 100));
+    UI.vol.oninput = function (e) {
+      armSound();
+      const v = clamp(parseInt(e.target.value, 10) / 100, 0, 1);
+      SFX.setVolume(isFinite(v) ? v : 0.7);
+      guardarAjuste('vol', String(Math.round((isFinite(v) ? v : 0.7) * 100)));
+      UI.vol.title = 'Volumen ' + Math.round((isFinite(v) ? v : 0.7) * 100) + '%';
+    };
+    UI.vol.onchange = function () { try { SFX.play('tick'); } catch (e) { } };
+    UI.vol.title = 'Volumen ' + UI.vol.value + '%';
+  }
+  if (leerAjuste('mute') === '1') {
+    /* solo se silencia: reactivar crearia un AudioContext sin gesto del usuario */
+    SFX.setMuted(true);
+    UI.sound.textContent = '🔇 Silencio';
+    UI.sound.title = 'Activar el sonido (M)';
+    UI.sound.setAttribute('aria-pressed', 'true');
+  }
+  $('mode').onchange = function (e) { armSound(); G.mode = e.target.value; hideBanner(); newGame(); sfx('horn'); };
   $('mode').value = G.mode;
   $('level').onchange = function (e) { armSound(); G.aiLevel = parseInt(e.target.value, 10) || 2; };
   $('level').value = String(G.aiLevel);
@@ -1839,6 +2031,7 @@ function init() {
     UI.sound.textContent = m ? '🔇 Silencio' : '🔊 Sonido';
     UI.sound.title = m ? 'Activar el sonido (M)' : 'Silenciar (M)';
     UI.sound.setAttribute('aria-pressed', String(m));
+    guardarAjuste('mute', m ? '1' : '0');
   };
   $('skip').onclick = function () { skipAnim(); };
 
@@ -1860,6 +2053,10 @@ function applyThemeVars() {
   r.setProperty('--wSteel', THEME.sprite.w.A);
   r.setProperty('--bSteel', THEME.sprite.b.A);
 }
+
+/* Ajustes que se recuerdan (volumen y silencio); si el almacen falla, nada pasa. */
+function leerAjuste(k) { try { return window.localStorage.getItem('bc.' + k); } catch (e) { return null; } }
+function guardarAjuste(k, v) { try { window.localStorage.setItem('bc.' + k, v); } catch (e) { } }
 
 /* Gancho de depuracion/pruebas automatizadas (no altera el juego). */
 window.__BC = {
@@ -1888,6 +2085,7 @@ function harden() {
   wrap(FX, 'drawFightCloud'); wrap(FX, 'drawComicWord'); wrap(FX, 'drawFlash');
   try { if (!FX.shake || typeof FX.shake.x !== 'number') FX.shake = { x: 0, y: 0 }; } catch (e) { }
   wrap(SFX, 'play'); wrap(SFX, 'init'); wrap(SFX, 'setMuted'); wrap(SFX, 'setVolume');
+  wrap(SFX, 'getVolume', 0.7);
   const im = typeof SFX.isMuted === 'function' ? SFX.isMuted.bind(SFX) : null;
   SFX.isMuted = function () { try { return im ? !!im() : false; } catch (e) { return false; } };
 }

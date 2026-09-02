@@ -1120,6 +1120,165 @@ ok(rescate.dormidoOtraVez === 'suspended' && rescate.trasBoton === 'running' && 
   'el boton Sonido reanima el contexto suspendido (' + rescate.dormidoOtraVez + ' -> ' + rescate.trasBoton + ')');
 await snd.close();
 
+console.log('\n== 44. Sonido con caracter: cada poder tiene su voz y suena desde su columna ==');
+const voces = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  const orig = B.SFX.play;
+  const CASOS = [
+    ['peon', '4k3/8/8/7p/6P1/8/8/4K3 w - - 0 1', 38, 31, ['charge', 'whoosh', 'clash']],     // g4xh5: columna h
+    ['caballo', '4k3/8/8/3p4/8/4N3/8/4K3 w - - 0 1', 44, 27, ['charge', 'gallop', 'clash']],
+    ['alfil', '4k3/8/8/3p4/8/1B6/8/4K3 w - - 0 1', 41, 27, ['charge', 'zap', 'disintegrate']],
+    ['torre', '4k3/8/8/3p4/8/8/8/3RK3 w - - 0 1', 59, 27, ['charge', 'rumble', 'stone']],
+    ['reina', '4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1', 59, 27, ['charge', 'zap', 'thunder']],
+    ['rey', '4k3/8/8/8/8/8/3p4/3K4 w - - 0 1', 59, 51, ['charge', 'fanfare', 'clash']]
+  ];
+  const out = [];
+  for (const [nombre, fen, from, to, esperadas] of CASOS) {
+    const oidos = [];
+    B.SFX.play = function (n, o) { oidos.push({ n: n, pan: o && o.pan }); return orig(n, o); };
+    B.setState(B.Engine.fromFen(fen));
+    const mv = B.Engine.legalMoves(B.G.state).find(m => m.from === from && m.to === to);
+    B.startMove(mv);
+    const t0 = performance.now();
+    while (B.busy && performance.now() - t0 < 25000) await new Promise(r => requestAnimationFrame(r));
+    B.SFX.play = orig;
+    const nombres = new Set(oidos.map(o => o.n));
+    const pans = oidos.filter(o => typeof o.pan === 'number').map(o => o.pan);
+    out.push({
+      nombre: nombre, faltan: esperadas.filter(n => !nombres.has(n)), distintas: nombres.size,
+      pan: pans.length ? +(pans.reduce((a, b) => a + b, 0) / pans.length).toFixed(2) : null, log: B.G.log[0]
+    });
+  }
+  return out;
+});
+for (const v of voces) {
+  ok(v.faltan.length === 0 && v.distintas >= 5,
+    v.nombre + ' (' + v.log + '): ' + v.distintas + ' voces distintas' + (v.faltan.length ? ', faltan ' + v.faltan.join(', ') : ''));
+}
+ok(voces[0].pan > 0.4, 'la captura en la columna h se oye a la derecha (pan medio ' + voces[0].pan + ')');
+ok(voces.slice(1).every(v => Math.abs(v.pan) < 0.2), 'las capturas en la columna d suenan centradas (' + voces.slice(1).map(v => v.pan).join(', ') + ')');
+
+console.log('\n== 45. Golpe con peso: hit-stop, tiron de camara y estela ==');
+const peso = await page.evaluate(async () => {
+  const B = window.__BC;
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/4N3/8/4K3 w - - 0 1'));
+  const mv = B.Engine.legalMoves(B.G.state).find(m => m.from === 44 && m.to === 27);
+  B.startMove(mv);
+  let stop = 0, punch = 0, ghosts = 0, vs = '';
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 25000) {
+    await new Promise(r => requestAnimationFrame(r));
+    if (B.anim) {
+      stop = Math.max(stop, B.anim.stop || 0);
+      if (B.anim.punch) punch = Math.max(punch, B.anim.punch.k);
+      const A = B.anim.actors[0];
+      if (A && A.ghosts) ghosts = Math.max(ghosts, A.ghosts.length);
+      if (!vs) vs = document.getElementById('vs').textContent;
+    }
+  }
+  return {
+    stop: +stop.toFixed(3), punch: +punch.toFixed(2), ghosts: ghosts, vs: vs,
+    ms: Math.round(performance.now() - t0), log: B.G.log[0], colgado: !!B.anim || B.busy,
+    vsDespues: document.getElementById('vs').textContent
+  };
+});
+ok(peso.stop > 0.03 && peso.punch > 0.3 && peso.ghosts >= 3 && peso.log === 'Nxd5' && !peso.colgado,
+  'la embestida congela ' + peso.stop + ' s, tira de la camara (' + peso.punch + ') y deja ' + peso.ghosts + ' estelas; termina en ' + peso.ms + ' ms');
+ok(/Caballero blanco .* Soldado negro/.test(peso.vs) && peso.vsDespues === '',
+  'el cartel del duelo dice quien pelea ("' + peso.vs + '") y se borra al acabar');
+
+/* con movimiento reducido no hay hit-stop, ni tiron, ni estela */
+const rm3 = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+await rm3.emulateMedia({ reducedMotion: 'reduce' });
+await rm3.goto(URL);
+await rm3.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const pesoRM = await rm3.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'rapido';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/4N3/8/4K3 w - - 0 1'));
+  B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.from === 44 && m.to === 27));
+  let stop = 0, punch = 0, ghosts = 0;
+  const t0 = performance.now();
+  while (B.busy && performance.now() - t0 < 25000) {
+    await new Promise(r => requestAnimationFrame(r));
+    if (B.anim) {
+      stop = Math.max(stop, B.anim.stop || 0);
+      if (B.anim.punch) punch = 1;
+      const A = B.anim.actors[0];
+      if (A && A.ghosts) ghosts = Math.max(ghosts, A.ghosts.length);
+    }
+  }
+  return { stop, punch, ghosts, log: B.G.log[0] };
+});
+ok(pesoRM.stop === 0 && pesoRM.punch === 0 && pesoRM.ghosts === 0 && pesoRM.log === 'Nxd5',
+  'con prefers-reduced-motion la embestida no congela, no tira de la camara ni deja estela');
+await rm3.close();
+
+console.log('\n== 46. Volumen: el control manda a SFX y se recuerda ==');
+const ctxVol = await browser.newContext({ viewport: { width: 1100, height: 760 } });
+const pv = await ctxVol.newPage();
+await pv.goto(URL);
+await pv.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const vol1 = await pv.evaluate(() => {
+  const s = document.getElementById('vol');
+  const antes = window.__BC.SFX.getVolume();
+  s.value = '30';
+  s.dispatchEvent(new Event('input', { bubbles: true }));
+  s.dispatchEvent(new Event('change', { bubbles: true }));
+  return { antes: antes, despues: window.__BC.SFX.getVolume(), title: s.title };
+});
+ok(Math.abs(vol1.antes - 0.7) < 1e-6 && Math.abs(vol1.despues - 0.3) < 1e-6 && /30/.test(vol1.title),
+  'mover el control cambia el volumen (' + vol1.antes + ' -> ' + vol1.despues + ', "' + vol1.title + '")');
+await pv.click('#sound');                       // silenciar: tambien se recuerda
+const pv2 = await ctxVol.newPage();
+await pv2.goto(URL);
+await pv2.waitForFunction(() => window.__BC && window.__BC.G.state, null, { timeout: 20000 });
+const vol2 = await pv2.evaluate(() => ({
+  vol: window.__BC.SFX.getVolume(), slider: document.getElementById('vol').value,
+  mudo: window.__BC.SFX.isMuted(), pressed: document.getElementById('sound').getAttribute('aria-pressed'),
+  ctx: window.__BC.SFX.estado()
+}));
+ok(Math.abs(vol2.vol - 0.3) < 1e-6 && vol2.slider === '30', 'al volver a abrir el juego el volumen sigue al 30%');
+ok(vol2.mudo && vol2.pressed === 'true' && vol2.ctx === 'sin-contexto',
+  'el silencio se recuerda sin crear un AudioContext antes del primer gesto (' + vol2.ctx + ')');
+await ctxVol.close();
+
+console.log('\n== 47. La cronica marca capturas, jaques y la ultima jugada ==');
+const cron2 = await page.evaluate(async () => {
+  const B = window.__BC;
+  document.getElementById('speed').value = 'sin';
+  document.getElementById('speed').dispatchEvent(new Event('change'));
+  document.getElementById('mode').value = 'hh';
+  document.getElementById('mode').dispatchEvent(new Event('change'));
+  B.setState(B.Engine.fromFen('4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1'));
+  const juega = async (from, to) => {
+    B.startMove(B.Engine.legalMoves(B.G.state).find(m => m.from === from && m.to === to));
+    await new Promise(r => setTimeout(r, 40));
+  };
+  await juega(59, 27);            // Qxd5   (captura)
+  const pulso = document.getElementById('turn').classList.contains('pulse');
+  await juega(4, 5);              // Kf8
+  await juega(27, 3);             // Qd8+   (jaque)
+  const q = s => document.querySelector(s);
+  return {
+    log: B.G.log.join(' '),
+    cap: q('.movelist .san.cap') && q('.movelist .san.cap').textContent,
+    chk: q('.movelist .san.chk') && q('.movelist .san.chk').textContent,
+    ultimas: document.querySelectorAll('.movelist li.last').length,
+    ultima: q('.movelist li.last') && q('.movelist li.last').textContent.replace(/\s+/g, ' ').trim(),
+    pulso: pulso
+  };
+});
+ok(cron2.cap === 'Qxd5' && cron2.chk === 'Qd8+' && cron2.ultimas === 1 && /Qd8\+/.test(cron2.ultima) && cron2.pulso,
+  'capturas (' + cron2.cap + '), jaques (' + cron2.chk + ') y la ultima jugada (' + cron2.ultima + ') van marcados; el turno late');
+
 console.log('\n== Errores acumulados en la pagina ==');
 ok(errors.length === 0, errors.length ? errors.slice(0, 5).join(' | ') : 'ninguno');
 

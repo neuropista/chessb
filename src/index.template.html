@@ -55,13 +55,14 @@
     <button id="undo" title="Deshacer (U)">&#8624; Deshacer</button>
     <button id="flip" title="Girar el tablero (F)">&#8645; Girar</button>
     <button id="sound" aria-pressed="false" title="Silenciar (M)">&#128266; Sonido</button>
+    <input id="vol" class="vol" type="range" min="0" max="100" step="5" value="70" aria-label="Volumen" title="Volumen 70%">
   </div>
 </header>
 <main>
   <div id="stage">
     <canvas id="board3d" aria-hidden="true"></canvas>
     <canvas id="board" aria-label="Tablero de ajedrez"></canvas>
-    <div id="hint" class="hint">Clic o <b>Espacio</b> para acelerar el combate <button id="skip">Saltar</button></div>
+    <div id="hint" class="hint"><span id="vs" class="vs"></span>Clic o <b>Espacio</b> para acelerar el combate <button id="skip">Saltar</button></div>
     <div id="banner" class="banner"><div id="bannerT"></div><div id="bannerS"></div></div>
     <div id="promo" class="promo"><div class="promoBox"><p>&#9819; Elige la pieza de coronacion</p><div id="promoRow"></div></div></div>
   </div>

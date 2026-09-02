@@ -118,7 +118,8 @@ function makeCtx(canvasW, canvasH) {
 function assert(cond, msg) { if (!cond) fail(msg); }
 
 var KINDS = ['dust', 'sparks', 'slash', 'impact', 'stars', 'magic',
-             'bolt', 'stone', 'pixelBurst', 'smoke', 'poof'];
+             'bolt', 'stone', 'pixelBurst', 'smoke', 'poof',
+             'ring', 'crack', 'vortex', 'ember'];
 
 function makeSprite(cx, cy) {
   var out = [];
@@ -152,7 +153,10 @@ try {
       var x = 100 + (f % 7) * 40;
       var y = 120 + (f % 5) * 30;
       var o = { power: 1 + (f % 3) * 0.5, scale: 0.8 + (f % 4) * 0.3, dir: (f % 12) * 0.5 };
-      if (k === 'bolt') { o.x2 = x + 90; o.y2 = y - 60; o.color = '#8fdcff'; }
+      if (k === 'bolt') { o.x2 = x + 90; o.y2 = y - 60; o.color = '#8fdcff'; o.branches = f % 3; }
+      if (k === 'vortex') { o.x2 = x + 30; o.y2 = y - 50; o.n = 8; if (f % 2) o.sprite = makeSprite(x, y); }
+      if (k === 'crack') { o.n = 4 + (f % 3); }
+      if (k === 'ring') { o.flat = (f % 2) ? 1 : 0.4; o.width = 2 + (f % 3); }
       if (k === 'pixelBurst') { o.sprite = makeSprite(x, y); }
       if (k === 'magic') { o.color = '#c58cff'; o.color2 = '#fff'; }
       FX.emit(k, x, y, o);
@@ -162,6 +166,8 @@ try {
       if (f % 23 === 0) FX.emit('sparks', x, y, { n: 3, color: '#fff', life: 0.2, gravity: 0 });
       if (f % 29 === 0) FX.emit('pixelBurst', x, y, { sprite: [] });
       if (f % 31 === 0) FX.emit('noExiste', x, y, {});
+      if (f % 37 === 0) FX.emit('vortex', x, y);           // sin destino: no debe romper
+      if (f % 41 === 0) FX.emit('bolt', x, y, { x2: x + 5, y2: y });   // rayo corto: sin ramas
       if (f % 13 === 0) FX.shakeImpulse(2 + (f % 12));
     }
 
